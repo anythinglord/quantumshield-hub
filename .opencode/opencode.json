@@ -7,22 +7,22 @@
       "model": "opencode/big-pickle"
     },
     "sdd-init": {
-      "model": "opencode/mimo-v2.6-free"
+      "model": "opencode/mimo-v2.6-flash-free"
     },
     "sdd-explore": {
-      "model": "opencode/mimo-v2.6-free"
+      "model": "opencode/mimo-v2.6-flash-free"
     },
     "sdd-propose": {
       "model": "opencode/big-pickle"
     },
     "sdd-tasks": {
-      "model": "opencode/mimo-v2.6-free"
+      "model": "opencode/mimo-v2.6-flash-free"
     },
     "sdd-verify": {
-      "model": "opencode/mimo-v2.6-free"
+      "model": "opencode/mimo-v2.6-flash-free"
     },
     "sdd-archive": {
-      "model": "opencode/mimo-v2.6-free"
+      "model": "opencode/mimo-v2.6-flash-free"
     },
     "sdd-spec": {
       "model": "opencode/big-pickle"
