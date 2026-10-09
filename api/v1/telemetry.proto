@@ -1,0 +1,147 @@
+// QuantumShield Hub — API contract (v1).
+//
+// gRPC services and message contracts for the QuantumShield telemetry
+// control plane:
+//
+//   - TelemetryIngestionService: bidirectional streaming ingestion of
+//     edge telemetry with per-payload ML-DSA (Dilithium, FIPS 204)
+//     signatures.
+//   - DeviceAuthService: device identity lifecycle, PQC public-key lookup
+//     and status checks.
+//
+// Wire rules (AGENTS.md §3, gRPC & Protocol Buffers):
+//   - Never renumber, reorder or change the type of an existing field.
+//   - New functionality only appends new field numbers.
+//
+// Transport: hybrid PQC mTLS (TLS 1.3, X25519 + ML-KEM-768). Payloads are
+// signed by the edge node with ML-DSA and verified by the Ingestion
+// Service before acceptance.
+
+syntax = "proto3";
+
+package quantumshield.v1;
+
+option go_package = "quantumshield-hub/api/v1;apiv1";
+
+// ML-DSA (Dilithium, FIPS 204) parameter set used for a signature.
+enum SignatureAlgorithm {
+  SIGNATURE_ALGORITHM_UNSPECIFIED = 0;
+  ML_DSA_44 = 1;
+  ML_DSA_65 = 2;
+  ML_DSA_87 = 3;
+}
+
+// Lifecycle state of a registered device.
+enum DeviceStatus {
+  DEVICE_STATUS_UNSPECIFIED = 0;
+  DEVICE_STATUS_ACTIVE = 1;
+  DEVICE_STATUS_SUSPENDED = 2;
+  DEVICE_STATUS_REVOKED = 3;
+}
+
+// Per-event ingestion result returned to the edge node.
+enum IngestStatus {
+  INGEST_STATUS_UNSPECIFIED = 0;
+  INGEST_STATUS_ACCEPTED = 1;
+  INGEST_STATUS_REJECTED_SIGNATURE = 2;
+  INGEST_STATUS_REJECTED_DEVICE = 3;
+  INGEST_STATUS_THROTTLED = 4;
+}
+
+// GPS position of an edge node.
+message GpsPosition {
+  double latitude = 1;   // degrees, WGS84
+  double longitude = 2;  // degrees, WGS84
+}
+
+// One sensor sample produced by an edge node.
+message SensorReading {
+  // Monotonically increasing sequence number within the device stream.
+  uint64 sequence = 1;
+  // Unix epoch, nanoseconds (edge clock).
+  int64 timestamp_nanos = 2;
+  double temperature_c = 3;  // degrees Celsius
+  double voltage_v = 4;      // volts
+  double current_a = 5;      // amperes
+  GpsPosition position = 6;  // optional; absent for fixed nodes
+}
+
+// Batch of readings from one device. This is the payload signed by the
+// edge node: the signature in TelemetryIngestRequest covers the exact
+// serialized bytes of this message.
+message TelemetryBatch {
+  string device_id = 1;
+  repeated SensorReading readings = 2;
+}
+
+// One signed telemetry event sent over the ingestion stream.
+message TelemetryIngestRequest {
+  // Registered identity of the sending edge node.
+  string device_id = 1;
+  // Serialized TelemetryBatch — the exact bytes covered by `signature`.
+  bytes payload = 2;
+  // ML-DSA signature (FIPS 204) over `payload`.
+  bytes signature = 3;
+  SignatureAlgorithm signature_algorithm = 4;
+}
+
+// Per-event acknowledgement/result for the edge node.
+message TelemetryIngestResponse {
+  // Highest accepted sequence number from this device's stream so far.
+  uint64 acked_sequence = 1;
+  IngestStatus status = 2;
+}
+
+// Registers a device identity and stores its ML-DSA public key.
+message RegisterDeviceRequest {
+  string device_id = 1;
+  SignatureAlgorithm signature_algorithm = 2;
+  bytes public_key = 3;  // raw ML-DSA public key bytes
+  string model = 4;      // optional metadata
+  string location = 5;   // optional metadata
+}
+
+message RegisterDeviceResponse {
+  string device_id = 1;
+  DeviceStatus status = 2;
+}
+
+// Looks up the registered PQC public key of a device.
+message GetDeviceKeyRequest {
+  string device_id = 1;
+}
+
+message GetDeviceKeyResponse {
+  string device_id = 1;
+  SignatureAlgorithm signature_algorithm = 2;
+  bytes public_key = 3;
+  DeviceStatus status = 4;
+}
+
+// Reports the current lifecycle state of a device.
+message CheckDeviceStatusRequest {
+  string device_id = 1;
+}
+
+message CheckDeviceStatusResponse {
+  string device_id = 1;
+  DeviceStatus status = 2;
+}
+
+// Bidirectional streaming ingestion of signed edge telemetry. The edge
+// node sends TelemetryIngestRequest events; the Ingestion Service verifies
+// the ML-DSA signature and reports per-event results in stream order.
+service TelemetryIngestionService {
+  rpc StreamTelemetry(stream TelemetryIngestRequest)
+      returns (stream TelemetryIngestResponse);
+}
+
+// Device identity lifecycle: registration, PQC key lookup and status
+// checks. Used by the Ingestion Service for key retrieval and by
+// provisioning tooling for registration.
+service DeviceAuthService {
+  rpc RegisterDevice(RegisterDeviceRequest) returns (RegisterDeviceResponse);
+  rpc GetDeviceKey(GetDeviceKeyRequest) returns (GetDeviceKeyResponse);
+  rpc CheckDeviceStatus(CheckDeviceStatusRequest)
+      returns (CheckDeviceStatusResponse);
+}
