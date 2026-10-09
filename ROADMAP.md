@@ -16,15 +16,15 @@ Phased implementation plan. Phases are sequential: contracts → edge → persis
 ### Phase 1: Contracts, PKI & Base Cryptography
 > **Goal:** Establish project conventions, generate PKI infrastructure (mTLS + PQC), and define gRPC interface contracts.
 
-- [ ] **Task 1.1: Project Initialization**
+- [x] **Task 1.1: Project Initialization**
   - `go.mod` already exists with module path `quantumshield-hub` — replace it with the canonical repository path (e.g. `github.com/<owner>/quantumshield-hub`) before the first cross-package import lands; renaming later touches every import.
   - Create the standard project layout according to `AGENTS.md` §2 (target layout).
-- [ ] **Task 1.2: Protocol Buffer Specifications**
+- [x] **Task 1.2: Protocol Buffer Specifications**
   - Create `api/v1/telemetry.proto` defining:
     - `TelemetryIngestionService` (Bidirectional gRPC streaming).
     - `DeviceAuthService` (Registration, PQC key lookup, and status checks).
     - Data messages with fields for ML-DSA (Dilithium) signatures and sensor payload metrics.
-- [ ] **Task 1.3: Build Automation**
+- [x] **Task 1.3: Build Automation**
   - Create `Makefile` targets `proto` (protoc-gen-go + protoc-gen-go-grpc), `test`, and `lint` (gofmt + go vet) so the Definition of Done is runnable from day one.
   - Add a `changelog` target wrapping `git cliff --output CHANGELOG.md` (config committed as `cliff.toml`).
 - [ ] **Task 1.4: Public Key Infrastructure (PKI)**
