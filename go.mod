@@ -1,4 +1,4 @@
-module quantumshield-hub
+module github.com/anythinglord/quantumshield-hub
 
 go 1.27.0
 

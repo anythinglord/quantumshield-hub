@@ -932,7 +932,7 @@ const file_api_v1_telemetry_proto_rawDesc = "" +
 	"\x11DeviceAuthService\x12c\n" +
 	"\x0eRegisterDevice\x12'.quantumshield.v1.RegisterDeviceRequest\x1a(.quantumshield.v1.RegisterDeviceResponse\x12]\n" +
 	"\fGetDeviceKey\x12%.quantumshield.v1.GetDeviceKeyRequest\x1a&.quantumshield.v1.GetDeviceKeyResponse\x12l\n" +
-	"\x11CheckDeviceStatus\x12*.quantumshield.v1.CheckDeviceStatusRequest\x1a+.quantumshield.v1.CheckDeviceStatusResponseB Z\x1equantumshield-hub/api/v1;apiv1b\x06proto3"
+	"\x11CheckDeviceStatus\x12*.quantumshield.v1.CheckDeviceStatusRequest\x1a+.quantumshield.v1.CheckDeviceStatusResponseB8Z6github.com/anythinglord/quantumshield-hub/api/v1;apiv1b\x06proto3"
 
 var (
 	file_api_v1_telemetry_proto_rawDescOnce sync.Once

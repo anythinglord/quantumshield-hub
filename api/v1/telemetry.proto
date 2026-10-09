@@ -21,7 +21,7 @@ syntax = "proto3";
 
 package quantumshield.v1;
 
-option go_package = "quantumshield-hub/api/v1;apiv1";
+option go_package = "github.com/anythinglord/quantumshield-hub/api/v1;apiv1";
 
 // ML-DSA (Dilithium, FIPS 204) parameter set used for a signature.
 enum SignatureAlgorithm {
