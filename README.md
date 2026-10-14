@@ -93,11 +93,25 @@ make dev-up   # local stack (Docker + Kind + Terraform)
 make dev-down # tear down local infrastructure
 ```
 
-These targets are implemented in ROADMAP Phase 1 (build automation) and Phase 5 (dev environment). Until they exist, see `AGENTS.md` §4 for the full command list.
+These targets are implemented across ROADMAP Phase 1 (build automation: `proto`, `certs`, `test`, `lint`) and Phase 5 (dev environment: `dev-up`, `dev-down`). Until the dev targets exist, see `AGENTS.md` §4 for the full command list.
 
 ## Configuration & Environment Variables
 
-None defined yet. Every new environment variable or service must be documented in this README (rule enforced by `AGENTS.md` §5).
+Every new environment variable or service must be documented in this README (rule enforced by `AGENTS.md` §5).
+
+### Local test PKI (`make certs`)
+
+`make certs` runs `scripts/gen-certs.sh` to generate a local hybrid-PQC mTLS PKI — root CA → intermediate CA (`pathlen:0`) → server + client TLS 1.3 leaves — under `certs/`. Certificates are ML-DSA-65-signed by default (Ed25519 fallback when OpenSSL lacks ML-DSA); all generated material is git-ignored. The script honors these variables:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CERTS_DIR` | `./certs` | Output directory for the generated PKI |
+| `SIG_ALG` | `mldsa-65` | Signature algorithm: `mldsa-65` (PQC) or `ed25519` |
+| `ROOT_DAYS` | `3650` | Root CA validity in days |
+| `INTERMEDIATE_DAYS` | `1825` | Intermediate CA validity in days |
+| `LEAF_DAYS` | `825` | Leaf certificate validity in days |
+| `FORCE` | unset | Set to `1` to wipe and regenerate an existing PKI |
+| `SERVER_SANS` | `DNS:localhost,DNS:ingestion-service,DNS:ingestion-service.quantumshield.svc.cluster.local,DNS:auth-service,DNS:auth-service.quantumshield.svc.cluster.local,DNS:device-simulator,IP:127.0.0.1,IP:::1` | Server leaf SAN list; fully replaces the default |
 
 ## Changelog
 
