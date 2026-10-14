@@ -24,3 +24,6 @@ certs/*
 .vscode/
 *.swp
 .DS_Store
+
+# Local agent tooling state (skill registry is per-machine; see AGENTS.md)
+.atl/
