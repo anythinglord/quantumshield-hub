@@ -56,6 +56,10 @@ quantumshield-hub/
 │   ├── variables.tf
 │   └── outputs.tf
 ├── scripts/                         # Certificate generation & helper shell scripts
+├── certs/                           # Generated local PQC mTLS PKI (git-ignored; .gitkeep tracked)
+│   ├── ca/                          # Root + intermediate CA (certs, keys, serial)
+│   ├── server/                      # Server leaf certificate + chain
+│   └── client/                      # Client leaf certificate + chain
 ├── CHANGELOG.md                     # Generated from Conventional Commits (git-cliff)
 ├── cliff.toml                       # git-cliff changelog configuration
 ├── Makefile                         # Build, test, and run automation tasks

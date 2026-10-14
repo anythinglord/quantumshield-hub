@@ -27,7 +27,7 @@ Phased implementation plan. Phases are sequential: contracts → edge → persis
 - [x] **Task 1.3: Build Automation**
   - Create `Makefile` targets `proto` (protoc-gen-go + protoc-gen-go-grpc), `test`, and `lint` (gofmt + go vet) so the Definition of Done is runnable from day one.
   - Add a `changelog` target wrapping `git cliff --output CHANGELOG.md` (config committed as `cliff.toml`).
-- [ ] **Task 1.4: Public Key Infrastructure (PKI)**
+- [x] **Task 1.4: Public Key Infrastructure (PKI)**
   - Write `scripts/gen-certs.sh` to generate local Root CAs, intermediate authorities, and TLS 1.3 client/server certificates.
 - [ ] **Task 1.5: Cryptographic Utilities Package**
   - Implement `internal/crypto`:
