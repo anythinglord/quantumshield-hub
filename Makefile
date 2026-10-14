@@ -14,7 +14,7 @@ PLUGIN_GO_GRPC := $(GOBIN)/protoc-gen-go-grpc
 export PATH := $(GOBIN):$(PATH)
 
 .DEFAULT_GOAL := help
-.PHONY: help proto test lint fmt changelog staticcheck tools
+.PHONY: help proto certs test lint fmt changelog staticcheck tools
 
 help: ## List available targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -25,6 +25,9 @@ proto: ## Generate Go + gRPC bindings (api/v1, package apiv1)
 	  --go_out=. --go_opt=paths=source_relative \
 	  --go-grpc_out=. --go-grpc_opt=paths=source_relative \
 	  $(PROTO_FILE)
+
+certs: ## Generate local mTLS + PQC test PKI (scripts/gen-certs.sh)
+	./scripts/gen-certs.sh
 
 test: ## Run go test ./...
 	go test ./...
