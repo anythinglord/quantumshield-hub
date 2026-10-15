@@ -57,3 +57,6 @@ filter_commits = false
 # Tags look like v0.1.0, v0.2.0, ... (one per completed phase).
 tag_pattern = "v[0-9]*"
 sort_commits = "oldest"
+# Commits that ONLY touch the generated changelog are excluded, so a regen
+# commit never re-stales the file (gate loop converges). Verified on git-cliff 2.14.2.
+exclude_paths = ["CHANGELOG.md"]
