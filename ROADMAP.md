@@ -29,7 +29,7 @@ Phased implementation plan. Phases are sequential: contracts → edge → persis
   - Add a `changelog` target wrapping `git cliff --output CHANGELOG.md` (config committed as `cliff.toml`).
 - [x] **Task 1.4: Public Key Infrastructure (PKI)**
   - Write `scripts/gen-certs.sh` to generate local Root CAs, intermediate authorities, and TLS 1.3 client/server certificates.
-- [ ] **Task 1.5: Cryptographic Utilities Package**
+- [x] **Task 1.5: Cryptographic Utilities Package**
   - Implement `internal/crypto`:
     - `crypto/tls` configuration for strict mTLS (`RequireAndVerifyClientCert`) with hybrid PQC curve support (`tls.X25519MLKEM768`).
     - Signature verification wrappers for ML-DSA (Dilithium) payloads.
