@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"net"
@@ -221,8 +222,18 @@ func TestPKILoaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCertPool(root): %v", err)
 	}
-	if n := len(roots.Subjects()); n == 0 {
-		t.Error("root cert pool is empty after loading the generated root CA")
+	// CertPool.Subjects() is deprecated; assert the loaded pool matches a pool
+	// built from the same PEM instead.
+	rootPEM, err := os.ReadFile(testPKI.rootCA)
+	if err != nil {
+		t.Fatalf("read root CA: %v", err)
+	}
+	want := x509.NewCertPool()
+	if !want.AppendCertsFromPEM(rootPEM) {
+		t.Fatal("root CA file yielded no parseable certificates")
+	}
+	if !roots.Equal(want) {
+		t.Error("LoadCertPool(root) did not load the certificates in the root CA file")
 	}
 }
 
