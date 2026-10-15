@@ -21,12 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 - First commit
-- Merge pull request #3 from anythinglord/ft/task-1.4-pki
-
-feat(pki): add local hybrid-PQC mTLS certificate generator (task 1.4)
-- Merge pull request #4 from anythinglord/ft/task-1.5-crypto
-
-feat(crypto): add strict mTLS TLS 1.3 policy builders (task 1.5)
 
 ### Refactor
 - **module:** Rename module to canonical repository path (task 1.1)

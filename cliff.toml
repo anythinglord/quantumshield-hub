@@ -39,6 +39,11 @@ conventional_commits = true
 filter_unconventional = false
 split_commits = false
 commit_parsers = [
+  # Skip VCS merge commits: they are noise in the changelog and, because a merge
+  # commit is created anew on every merge, they would make the committed
+  # CHANGELOG.md differ from a post-merge regeneration (breaking the CI
+  # staleness gate on push to main).
+  { message = "^Merge ", skip = true },
   { message = "^feat", group = "<!-- 0 -->Features" },
   { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
   { message = "^perf", group = "<!-- 2 -->Performance" },
