@@ -32,9 +32,10 @@ certs: ## Generate local mTLS + PQC test PKI (scripts/gen-certs.sh)
 test: ## Run go test ./...
 	go test ./...
 
-lint: ## gofmt check + go vet (read-only)
+lint: ## gofmt check + go vet + staticcheck (read-only)
 	@test -z "$$(gofmt -l .)" || { echo "gofmt: unformatted files:"; gofmt -l .; exit 1; }
 	go vet ./...
+	staticcheck ./...
 
 fmt: ## Format all Go code in place
 	gofmt -w .
@@ -42,7 +43,7 @@ fmt: ## Format all Go code in place
 changelog: ## Regenerate CHANGELOG.md from Conventional Commits
 	git cliff --output CHANGELOG.md
 
-staticcheck: ## Run staticcheck (optional; not part of lint)
+staticcheck: ## Run staticcheck only (also part of lint)
 	staticcheck ./...
 
 tools: ## Install pinned protoc plugins into $(GOBIN)

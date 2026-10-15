@@ -35,7 +35,7 @@ Phased implementation plan. Phases are sequential: contracts → edge → persis
     - Signature verification wrappers for ML-DSA (Dilithium) payloads.
   - Tests: assert `MinVersion == tls.VersionTLS13` and `ClientAuth == RequireAndVerifyClientCert`; ML-DSA sign→verify round-trip plus tampered-payload rejection.
 
-- [ ] **Task 1.6: CI Pipeline**
+- [x] **Task 1.6: CI Pipeline**
   - GitHub Actions workflow running `gofmt` check, `go vet`, and `go test ./...` on every push and pull request.
   - Fail the build if `CHANGELOG.md` is stale (generated output differs from the committed file).
   - Keeps the Definition of Done enforced for all later phases.
