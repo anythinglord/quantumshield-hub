@@ -2,6 +2,8 @@
 
 Post-Quantum Encrypted Telemetry & IoT Control Plane for Critical Infrastructure
 
+[![CI](https://github.com/anythinglord/quantumshield-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/anythinglord/quantumshield-hub/actions/workflows/ci.yml)
+
 ## Overview
 
 QuantumShield Hub is a cloud-native, zero-trust ingestion and telemetry control plane designed for high-concurrency IoT nodes operating in critical infrastructure environments (energy grids, vehicular fleets, industrial sensors).
@@ -93,11 +95,34 @@ make dev-up   # local stack (Docker + Kind + Terraform)
 make dev-down # tear down local infrastructure
 ```
 
-These targets are implemented in ROADMAP Phase 1 (build automation) and Phase 5 (dev environment). Until they exist, see `AGENTS.md` §4 for the full command list.
+These targets are implemented across ROADMAP Phase 1 (build automation: `proto`, `certs`, `test`, `lint`) and Phase 5 (dev environment: `dev-up`, `dev-down`). Until the dev targets exist, see `AGENTS.md` §4 for the full command list.
 
 ## Configuration & Environment Variables
 
-None defined yet. Every new environment variable or service must be documented in this README (rule enforced by `AGENTS.md` §5).
+Every new environment variable or service must be documented in this README (rule enforced by `AGENTS.md` §5).
+
+### Local test PKI (`make certs`)
+
+`make certs` runs `scripts/gen-certs.sh` to generate a local hybrid-PQC mTLS PKI — root CA → intermediate CA (`pathlen:0`) → server + client TLS 1.3 leaves — under `certs/`. Certificates are ML-DSA-65-signed by default (Ed25519 fallback when OpenSSL lacks ML-DSA); all generated material is git-ignored. The script honors these variables:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CERTS_DIR` | `./certs` | Output directory for the generated PKI |
+| `SIG_ALG` | `mldsa-65` | Signature algorithm: `mldsa-65` (PQC) or `ed25519` |
+| `ROOT_DAYS` | `3650` | Root CA validity in days |
+| `INTERMEDIATE_DAYS` | `1825` | Intermediate CA validity in days |
+| `LEAF_DAYS` | `825` | Leaf certificate validity in days |
+| `FORCE` | unset | Set to `1` to wipe and regenerate an existing PKI |
+| `SERVER_SANS` | `DNS:localhost,DNS:ingestion-service,DNS:ingestion-service.quantumshield.svc.cluster.local,DNS:auth-service,DNS:auth-service.quantumshield.svc.cluster.local,DNS:device-simulator,IP:127.0.0.1,IP:::1` | Server leaf SAN list; fully replaces the default |
+
+## Continuous Integration
+
+CI runs on every push and every pull request via [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+
+- **`lint-test`** — mirrors the local Definition of Done: `make lint` (gofmt + `go vet` + staticcheck) then `make test`.
+- **`changelog-stale`** — runs only for `main`-bound events (PR base `main` or push to `main`). It regenerates `CHANGELOG.md` with a pinned git-cliff and fails if the committed file differs. Fix by running `make changelog` locally, committing **only** `CHANGELOG.md`, and pushing again.
+
+Tool versions are pinned to match the local toolchain (staticcheck 2026.2.1, git-cliff 2.14.2) so lint and changelog output are byte-identical between local and CI runs.
 
 ## Changelog
 
@@ -118,3 +143,7 @@ Requires `git-cliff` (`cargo install git-cliff`).
 |------|---------|
 | `AGENTS.md` | Architecture rules, coding standards, and agent constraints |
 | `ROADMAP.md` | Phased implementation plan with acceptance criteria |
+
+## License
+
+This project is licensed under the Apache License 2.0 — see the [LICENSE](LICENSE) file for details.
