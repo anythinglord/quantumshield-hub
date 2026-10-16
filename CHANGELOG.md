@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 - **crypto:** Replace deprecated CertPool.Subjects in PKI test
+- **cliff:** Skip merge commits so the changelog gate converges
 
 ### Other
 - First commit
@@ -32,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **roadmap:** Mark phase 1 task 1.4 as complete
 - **roadmap:** Mark task 1.5 crypto utilities complete
 - Add CI badge/section and mark task 1.6 complete
+- **license:** Add Apache-2.0 LICENSE and document it
 
 ### Testing
 - **crypto:** Add hermetic mTLS handshake integration proof
