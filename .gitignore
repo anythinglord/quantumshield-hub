@@ -13,8 +13,17 @@ coverage.html
 .env.*
 !.env.example
 
+# Generated PKI material (scripts/gen-certs.sh) — never commit keys or certs
+certs/*
+!certs/.gitkeep
+*.key
+*.srl
+
 # Editor / OS
 .idea/
 .vscode/
 *.swp
 .DS_Store
+
+# Local agent tooling state (skill registry is per-machine; see AGENTS.md)
+.atl/
