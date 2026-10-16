@@ -40,10 +40,15 @@ Phased implementation plan. Phases are sequential: contracts → edge → persis
   - Fail the build if `CHANGELOG.md` is stale (generated output differs from the committed file).
   - Keeps the Definition of Done enforced for all later phases.
 
-- [ ] **Task 1.7: Repository Hygiene**
+- [x] **Task 1.7: Repository Hygiene**
   - Add a `LICENSE`.
   - Keep `AGENTS.md` and `ROADMAP.md` tracked (contract files must be visible to clones and CI) — do not re-add them to `.gitignore`.
   - Keep `CHANGELOG.md` and `cliff.toml` tracked as well.
+
+- [x] **Task 1.8: Release Automation**
+  - Add `.github/workflows/release.yml`, triggered by pushing a `v*` tag — not by a merge to `main` — so that one annotated tag per completed phase publishes exactly one GitHub Release.
+  - Generate Release notes with the same pinned git-cliff used by the changelog gate (`--latest --strip all`) and refuse tags that are not reachable from `main`.
+  - Raise `permissions: contents: write` in the release workflow only; `ci.yml` stays read-only.
 
 ---
 
