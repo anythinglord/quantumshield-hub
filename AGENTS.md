@@ -62,6 +62,7 @@ quantumshield-hub/
 │   └── client/                      # Client leaf certificate + chain
 ├── CHANGELOG.md                     # Generated from Conventional Commits (git-cliff)
 ├── cliff.toml                       # git-cliff changelog configuration
+├── LICENSE                          # Apache-2.0 license (Phase 1.7)
 ├── Makefile                         # Build, test, and run automation tasks
 └── README.md                        # Documentation
 ```
