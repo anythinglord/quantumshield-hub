@@ -117,12 +117,36 @@ Every new environment variable or service must be documented in this README (rul
 
 ## Continuous Integration
 
-CI runs on every push and every pull request via [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+CI runs on every branch push and every pull request via [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (tag pushes are handled by the release workflow instead):
 
 - **`lint-test`** — mirrors the local Definition of Done: `make lint` (gofmt + `go vet` + staticcheck) then `make test`.
 - **`changelog-stale`** — runs only for `main`-bound events (PR base `main` or push to `main`). It regenerates `CHANGELOG.md` with a pinned git-cliff and fails if the committed file differs. Fix by running `make changelog` locally, committing **only** `CHANGELOG.md`, and pushing again.
 
 Tool versions are pinned to match the local toolchain (staticcheck 2026.2.1, git-cliff 2.14.2) so lint and changelog output are byte-identical between local and CI runs.
+
+### Releases
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) publishes one GitHub Release per completed phase, triggered by pushing a `v*` tag — **not** by a merge to `main`. This matches the release cadence in `AGENTS.md` §4: one `v0.X.0` per phase. The tag is the human release decision, so merging a hotfix or a changelog commit must never publish a Release.
+
+When the tag is pushed the workflow:
+
+- refuses tags not reachable from `main` (a tag on a feature branch would describe unintegrated code);
+- generates the release notes with the same pinned git-cliff (`--latest --strip all`) that the changelog gate uses;
+- creates the Release from that tag with `gh release create --verify-tag`.
+
+Release procedure (the order matters):
+
+```bash
+# 1. merge the phase branch into develop
+# 2. merge develop into main            (the pending PR)
+# 3. tag the merge commit and push it   (must already be on main)
+git tag -a v0.X.0 -m "v0.X.0" && git push origin v0.X.0
+# 4. release.yml publishes the GitHub Release from the tag
+# 5. regenerate the changelog, commit and push
+make changelog && git commit -am "docs(repo): regenerate changelog" && git push
+```
+
+Step 5 is required: creating the tag re-labels git-cliff's section from `Unreleased` to `[X.Y.Z]`, so the committed `CHANGELOG.md` becomes stale and the `changelog-stale` gate needs the regenerated file.
 
 ## Changelog
 
