@@ -55,7 +55,7 @@ Phased implementation plan. Phases are sequential: contracts → edge → persis
 ### Phase 2: Edge Node & Device Simulator
 > **Goal:** Build a concurrent IoT client simulator in Go to test payload generation, PQC signing, and gRPC streaming independently.
 
-- [ ] **Task 2.1: CLI Framework**
+- [x] **Task 2.1: CLI Framework**
   - Implement the simulator CLI entrypoint at `cmd/device-simulator/main.go` supporting flags (`--devices`, `--rate`, `--address`, `--pqc-enabled`).
 - [ ] **Task 2.2: Synthetic Data Engine**
   - Develop `internal/simulator` to generate realistic sensor metrics (CPU temperature, voltage, current, GPS coordinates).
