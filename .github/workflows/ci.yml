@@ -4,14 +4,23 @@
 # Definition-of-Done interface declared in the Makefile (`make lint`,
 # `make test`) and never re-implements those checks inline.
 #
-#   lint-test       — always on (every push, every PR). Runs the local DoD gate.
+#   lint-test       — on every branch push and every PR (not on tags). Runs the
+#                     local DoD gate.
 #   changelog-stale — gated to `main` (PR base == main, or push to main).
 #                     Regenerates CHANGELOG.md and fails on any difference.
 
 name: CI
 
+# `branches: ['**']` is listed explicitly rather than relying on the subtle
+# "undefined ref" semantics of a bare `tags-ignore`: the intent is obvious, and
+# it keeps lint-test off tag pushes, where it could never be useful (release
+# tags are validated and published by release.yml instead).
 on:
   push:
+    branches:
+      - '**'
+    tags-ignore:
+      - '**'
   pull_request:
 
 # Least privilege: the run token may only read repository contents.

@@ -1,0 +1,85 @@
+# QuantumShield Hub — release pipeline (ROADMAP Phase 1, Task 1.8).
+#
+# Triggered by a `v*` TAG push, deliberately NOT by a merge to `main`.
+# Release cadence (AGENTS.md §4, cliff.toml) is exactly one `v0.X.0` per
+# completed ROADMAP phase, "do not tag per task". Releasing on every merge to
+# main would publish a Release for each hotfix/changelog commit and contradict
+# that cadence — the tag is the human release decision, so it is the trigger.
+#
+# Ordering constraint: the tag must point at a commit that is reachable from
+# `main`. GitHub Actions runs the workflow file AS IT EXISTS AT THE TAGGED
+# COMMIT, so the tag must already contain this file (i.e. the `develop` -> `main`
+# merge commit); a tag on a feature branch would describe unintegrated code and
+# is refused by the guard step below.
+#
+# CHANGELOG.md coupling: git-cliff derives its section headers from tags
+# (`cliff.toml` body: `## [{{ version }}]` vs `## [Unreleased]`), and the
+# `changelog-stale` job in ci.yml compares the committed CHANGELOG.md against a
+# fresh git-cliff run. Creating a tag therefore makes the committed CHANGELOG.md
+# stale until it is regenerated. Expected post-release sequence:
+#   merge -> tag -> workflow publishes Release -> make changelog -> commit.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# ci.yml deliberately stays `contents: read` (least privilege). This elevation
+# is scoped to the one workflow that writes a GitHub Release.
+permissions:
+  contents: write
+
+# Never cancel a release midway: a half-published Release is worse than a
+# queued one, so this deliberately differs from ci.yml's cancel-in-progress.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      # Full history AND all tags: git-cliff needs them to delimit the release
+      # range, and the reachability guard needs origin/main.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A tag on a feature branch would describe unintegrated code; refuse it.
+      # `checkout` with `fetch-depth: 0` has already fetched origin/main.
+      - name: Guard — tag must be reachable from main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error title=Tag not on main::Tag $GITHUB_REF_NAME points at $GITHUB_SHA, which is not reachable from main. Release only from integrated code."
+            exit 1
+          fi
+
+      # Pinned to the local toolchain (2.14.2), same rationale as the changelog
+      # gate in ci.yml: byte-identical output between local and CI. `--latest`
+      # scopes to the commits since the previous tag; `--strip all` drops the
+      # changelog header/footer, leaving the release section alone.
+      - name: Generate release notes (pinned git-cliff)
+        uses: orhun/git-cliff-action@v4
+        id: cliff
+        with:
+          version: v2.14.2
+          config: cliff.toml
+          args: --latest --strip all
+        env:
+          OUTPUT: ${{ runner.temp }}/release_notes.md
+
+      # `--verify-tag` makes `gh` fail if the tag is missing instead of happily
+      # creating it. The tag is the human release decision; the workflow must
+      # never invent one.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file "${{ steps.cliff.outputs.changelog }}" \
+            --verify-tag
