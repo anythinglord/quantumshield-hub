@@ -14,7 +14,7 @@ The platform is capable of processing thousands of gRPC streaming events per sec
 
 ## Status
 
-Early stage — repository bootstrap. No service is running yet. The implementation plan lives in `ROADMAP.md` (currently at Phase 1). Nothing here is production-ready.
+Early stage — repository bootstrap. No service is running yet. The implementation plan lives in `ROADMAP.md` (currently at Phase 2). Nothing here is production-ready.
 
 ## Architecture & System Design
 
@@ -96,6 +96,23 @@ make dev-down # tear down local infrastructure
 ```
 
 These targets are implemented across ROADMAP Phase 1 (build automation: `proto`, `certs`, `test`, `lint`) and Phase 5 (dev environment: `dev-up`, `dev-down`). Until the dev targets exist, see `AGENTS.md` §4 for the full command list.
+
+### Device simulator
+
+`cmd/device-simulator` is the edge-node entrypoint. Task 2.1 ships the CLI surface; the synthetic data engine, concurrency control, and gRPC streaming land in Tasks 2.2–2.4. Run it with `go run` (no Makefile target exists yet):
+
+```bash
+go run ./cmd/device-simulator --devices=4 --rate=5
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--devices` | int | `1` | Number of simulated edge devices (1–10000) |
+| `--rate` | float64 | `1.0` | Events/sec **per device**; total throughput is `devices × rate` |
+| `--address` | string | `localhost:50051` | gRPC target host:port |
+| `--pqc-enabled` | bool | `true` | Sign payloads with ML-DSA; transport is always mTLS regardless |
+
+Invalid values exit with code `2` and a diagnostic on stderr; `--help` prints usage to stdout and exits `0`.
 
 ## Configuration & Environment Variables
 
