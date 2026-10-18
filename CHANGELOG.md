@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **roadmap:** Mark task 1.5 crypto utilities complete
 - Add CI badge/section and mark task 1.6 complete
 - **license:** Add Apache-2.0 LICENSE and document it
+- **roadmap:** Add task 1.8 and close task 1.7
+- Document the release flow
 
 ### Testing
 - **crypto:** Add hermetic mTLS handshake integration proof
@@ -41,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - **make:** Add certs target for local PQC PKI
 - **make:** Wire staticcheck into lint recipe
+
+### CI
+- **release:** Add tag-triggered GitHub Release workflow
 
 ### Chore
 - **repo:** Add opencode agent config and gitignore
