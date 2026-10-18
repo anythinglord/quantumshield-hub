@@ -1,0 +1,94 @@
+# QuantumShield Hub — CI pipeline (ROADMAP Phase 1, Task 1.6).
+#
+# Two jobs, zero recipe duplication: the workflow calls the canonical
+# Definition-of-Done interface declared in the Makefile (`make lint`,
+# `make test`) and never re-implements those checks inline.
+#
+#   lint-test       — on every branch push and every PR (not on tags). Runs the
+#                     local DoD gate.
+#   changelog-stale — gated to `main` (PR base == main, or push to main).
+#                     Regenerates CHANGELOG.md and fails on any difference.
+
+name: CI
+
+# `branches: ['**']` is listed explicitly rather than relying on the subtle
+# "undefined ref" semantics of a bare `tags-ignore`: the intent is obvious, and
+# it keeps lint-test off tag pushes, where it could never be useful (release
+# tags are validated and published by release.yml instead).
+on:
+  push:
+    branches:
+      - '**'
+    tags-ignore:
+      - '**'
+  pull_request:
+
+# Least privilege: the run token may only read repository contents.
+permissions:
+  contents: read
+
+# Cancel superseded runs — except on `main`, where the release-bound gate must
+# be allowed to finish undisturbed.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  lint-test:
+    name: lint + test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Pinned to the local toolchain (2026.2.1 == v0.8.1, same commit). If the
+      # module proxy rejects the date tag, fall back to the semver equivalent:
+      #   go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+      # `go install` drops the binary into GOBIN, which the Makefile already
+      # exports onto PATH — no GITHUB_PATH step is needed.
+      - name: Install staticcheck (pinned)
+        run: go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+  changelog-stale:
+    name: CHANGELOG.md freshness
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main')
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    steps:
+      # Full history + tags for byte-parity with local generation. On PRs we
+      # check out the head SHA (not the synthetic merge ref, which would inject
+      # merge commits and cause a false-positive staleness failure).
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Regenerate changelog (pinned git-cliff)
+        uses: orhun/git-cliff-action@v4
+        id: cliff
+        with:
+          version: v2.14.2
+          config: cliff.toml
+          args: -v
+        env:
+          OUTPUT: ${{ runner.temp }}/generated_changelog.md
+
+      - name: Fail if CHANGELOG.md is stale
+        run: |
+          diff -u CHANGELOG.md "${{ steps.cliff.outputs.changelog }}" || {
+            echo "::error title=CHANGELOG.md stale::Committed CHANGELOG.md differs from git-cliff output. Fix: run 'make changelog' locally, commit ONLY CHANGELOG.md, push again."
+            exit 1
+          }

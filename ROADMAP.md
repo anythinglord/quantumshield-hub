@@ -16,34 +16,39 @@ Phased implementation plan. Phases are sequential: contracts → edge → persis
 ### Phase 1: Contracts, PKI & Base Cryptography
 > **Goal:** Establish project conventions, generate PKI infrastructure (mTLS + PQC), and define gRPC interface contracts.
 
-- [ ] **Task 1.1: Project Initialization**
+- [x] **Task 1.1: Project Initialization**
   - `go.mod` already exists with module path `quantumshield-hub` — replace it with the canonical repository path (e.g. `github.com/<owner>/quantumshield-hub`) before the first cross-package import lands; renaming later touches every import.
   - Create the standard project layout according to `AGENTS.md` §2 (target layout).
-- [ ] **Task 1.2: Protocol Buffer Specifications**
+- [x] **Task 1.2: Protocol Buffer Specifications**
   - Create `api/v1/telemetry.proto` defining:
     - `TelemetryIngestionService` (Bidirectional gRPC streaming).
     - `DeviceAuthService` (Registration, PQC key lookup, and status checks).
     - Data messages with fields for ML-DSA (Dilithium) signatures and sensor payload metrics.
-- [ ] **Task 1.3: Build Automation**
+- [x] **Task 1.3: Build Automation**
   - Create `Makefile` targets `proto` (protoc-gen-go + protoc-gen-go-grpc), `test`, and `lint` (gofmt + go vet) so the Definition of Done is runnable from day one.
   - Add a `changelog` target wrapping `git cliff --output CHANGELOG.md` (config committed as `cliff.toml`).
-- [ ] **Task 1.4: Public Key Infrastructure (PKI)**
+- [x] **Task 1.4: Public Key Infrastructure (PKI)**
   - Write `scripts/gen-certs.sh` to generate local Root CAs, intermediate authorities, and TLS 1.3 client/server certificates.
-- [ ] **Task 1.5: Cryptographic Utilities Package**
+- [x] **Task 1.5: Cryptographic Utilities Package**
   - Implement `internal/crypto`:
     - `crypto/tls` configuration for strict mTLS (`RequireAndVerifyClientCert`) with hybrid PQC curve support (`tls.X25519MLKEM768`).
     - Signature verification wrappers for ML-DSA (Dilithium) payloads.
   - Tests: assert `MinVersion == tls.VersionTLS13` and `ClientAuth == RequireAndVerifyClientCert`; ML-DSA sign→verify round-trip plus tampered-payload rejection.
 
-- [ ] **Task 1.6: CI Pipeline**
+- [x] **Task 1.6: CI Pipeline**
   - GitHub Actions workflow running `gofmt` check, `go vet`, and `go test ./...` on every push and pull request.
   - Fail the build if `CHANGELOG.md` is stale (generated output differs from the committed file).
   - Keeps the Definition of Done enforced for all later phases.
 
-- [ ] **Task 1.7: Repository Hygiene**
+- [x] **Task 1.7: Repository Hygiene**
   - Add a `LICENSE`.
   - Keep `AGENTS.md` and `ROADMAP.md` tracked (contract files must be visible to clones and CI) — do not re-add them to `.gitignore`.
   - Keep `CHANGELOG.md` and `cliff.toml` tracked as well.
+
+- [x] **Task 1.8: Release Automation**
+  - Add `.github/workflows/release.yml`, triggered by pushing a `v*` tag — not by a merge to `main` — so that one annotated tag per completed phase publishes exactly one GitHub Release.
+  - Generate Release notes with the same pinned git-cliff used by the changelog gate (`--latest --strip all`) and refuse tags that are not reachable from `main`.
+  - Raise `permissions: contents: write` in the release workflow only; `ci.yml` stays read-only.
 
 ---
 
