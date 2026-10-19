@@ -57,7 +57,7 @@ Phased implementation plan. Phases are sequential: contracts → edge → persis
 
 - [x] **Task 2.1: CLI Framework**
   - Implement the simulator CLI entrypoint at `cmd/device-simulator/main.go` supporting flags (`--devices`, `--rate`, `--address`, `--pqc-enabled`).
-- [ ] **Task 2.2: Synthetic Data Engine**
+- [x] **Task 2.2: Synthetic Data Engine**
   - Develop `internal/simulator` to generate realistic sensor metrics (CPU temperature, voltage, current, GPS coordinates).
   - Tests: table-driven coverage of value ranges (temperature, voltage, GPS bounds).
 - [ ] **Task 2.3: Concurrency Control**
