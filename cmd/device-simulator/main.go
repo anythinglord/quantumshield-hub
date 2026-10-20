@@ -1,7 +1,7 @@
 // Command device-simulator is the concurrent IoT edge-node simulator for
-// QuantumShield Hub. Task 2.1 wires the CLI surface (flags, validation, exit
-// codes); the synthetic data engine, concurrency control, and gRPC streaming
-// client land in Tasks 2.2–2.4 behind the simulate seam.
+// QuantumShield Hub. The CLI surface (flags, validation, exit codes), the
+// synthetic data engine, and the concurrent per-device fleet are wired here;
+// the gRPC streaming client lands in Task 2.4 behind the consumer seam.
 package main
 
 import (
@@ -16,6 +16,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/anythinglord/quantumshield-hub/internal/simulator"
 )
 
 // Config holds the validated simulator run parameters.
@@ -114,12 +116,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-// simulate is the Task 2.1 stub: it reports the effective configuration and
-// returns immediately so run() is end-to-end testable with no sleeps or
-// network. Tasks 2.2–2.4 replace this body in place — no main.go restructure.
-func simulate(_ context.Context, cfg Config) error {
-	log.Printf("device-simulator: effective config: devices=%d rate=%g events/sec/device address=%s pqc_enabled=%t (stub — simulation lands in Task 2.2)",
+// simulate runs the concurrent per-device fleet until ctx is cancelled. In
+// Task 2.3 the sink is an unobserved counting consumer (the fan-in drain
+// seam); Task 2.4 swaps in the gRPC streaming consumer without touching this
+// wiring. cfg.Address and cfg.PQCEnabled are carried for that consumer.
+func simulate(ctx context.Context, cfg Config) error {
+	log.Printf("device-simulator: starting %d device(s) at %g events/sec/device → %s (pqc_signing=%t)",
 		cfg.Devices, cfg.Rate, cfg.Address, cfg.PQCEnabled)
+	counter := simulator.NewCountingConsumer()
+	fleet := simulator.NewFleet(cfg.Devices, cfg.Rate, counter.Consume)
+	if err := fleet.Run(ctx); err != nil {
+		return fmt.Errorf("simulate: %w", err)
+	}
+	log.Printf("device-simulator: fleet stopped after %d batch(es)", counter.Received())
 	return nil
 }
 
