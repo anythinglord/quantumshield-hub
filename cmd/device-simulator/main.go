@@ -119,10 +119,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 // simulate runs the concurrent per-device fleet until ctx is cancelled. In
 // Task 2.3 the sink is an unobserved counting consumer (the fan-in drain
 // seam); Task 2.4 swaps in the gRPC streaming consumer without touching this
-// wiring. cfg.Address and cfg.PQCEnabled are carried for that consumer.
+// wiring. Transport settings (address, PQC signing) stay confined to
+// parse/validate until that consumer exists.
 func simulate(ctx context.Context, cfg Config) error {
-	log.Printf("device-simulator: starting %d device(s) at %g events/sec/device → %s (pqc_signing=%t)",
-		cfg.Devices, cfg.Rate, cfg.Address, cfg.PQCEnabled)
+	log.Printf("device-simulator: starting %d device(s) at %g events/sec/device",
+		cfg.Devices, cfg.Rate)
 	counter := simulator.NewCountingConsumer()
 	fleet := simulator.NewFleet(cfg.Devices, cfg.Rate, counter.Consume)
 	if err := fleet.Run(ctx); err != nil {
