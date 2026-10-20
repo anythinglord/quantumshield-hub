@@ -257,7 +257,7 @@ func TestRunConcurrentEmission(t *testing.T) {
 		}
 	})
 
-	t.Run("S-001.3 run returns nil on cancel", func(t *testing.T) {
+	t.Run("S-006.1 run returns nil on clean cancel", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		tb := newTickBoard()
@@ -302,7 +302,7 @@ func TestRunConcurrentEmission(t *testing.T) {
 }
 
 func TestPerDeviceStreamIntegrity(t *testing.T) {
-	t.Run("S-005.1 per-device sequences are monotonic", func(t *testing.T) {
+	t.Run("S-001.3 per-device sequences are monotonic", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		tb := newTickBoard()
@@ -382,6 +382,15 @@ func runBackpressureCase(t *testing.T, k int) (uint64, uint64, error) {
 }
 
 func TestBoundedBackpressure(t *testing.T) {
+	// Spec R-002 locks the fan-in capacity at 1024. Pin the SPEC LITERAL, not
+	// the identifier: a bounds assertion that reads outBuffer moves together
+	// with a const regression and cannot kill it (task-2.2 W1 precedent).
+	t.Run("S-002.1 fan-in capacity pinned to spec literal 1024", func(t *testing.T) {
+		if outBuffer != 1024 {
+			t.Fatalf("outBuffer = %d, want spec-locked literal 1024", outBuffer)
+		}
+	})
+
 	t.Run("S-002.1 stall receives exactly k", func(t *testing.T) {
 		const k = 5
 		stall, _, err := runBackpressureCase(t, k)
@@ -436,8 +445,10 @@ func TestTickDropUnderStall(t *testing.T) {
 			t.Fatalf("Run returned %v, want nil", err)
 		}
 		got := rec.Received()
-		if got > outBuffer {
-			t.Fatalf("received = %d, want <= outBuffer = %d", got, outBuffer)
+		// Literal bound (not outBuffer) so a const regression to a larger
+		// capacity cannot move the bound along with it (spec R-002 = 1024).
+		if got > 1024 {
+			t.Fatalf("received = %d, want <= spec-locked 1024", got)
 		}
 		if got >= uint64(fed) {
 			t.Fatalf("expected tick drop: received = %d, fed = %d", got, fed)
@@ -475,19 +486,72 @@ func TestFleetDeterminism(t *testing.T) {
 		}
 		return got
 	}
-	snap1 := runCase(t)
-	snap2 := runCase(t)
-	if len(snap1) != len(snap2) {
-		t.Fatalf("length mismatch: %d vs %d", len(snap1), len(snap2))
-	}
-	for i := range snap1 {
-		if snap1[i].DeviceId != snap2[i].DeviceId {
-			t.Fatalf("batch %d DeviceId mismatch: %s vs %s", i, snap1[i].DeviceId, snap2[i].DeviceId)
+	t.Run("S-005.1 same devices and timestamps yield identical streams", func(t *testing.T) {
+		snap1 := runCase(t)
+		snap2 := runCase(t)
+		if len(snap1) != len(snap2) {
+			t.Fatalf("length mismatch: %d vs %d", len(snap1), len(snap2))
 		}
-		if len(snap1[i].Readings) > 0 && len(snap2[i].Readings) > 0 {
-			assertSameReading(t, fmt.Sprintf("batch-%d", i), snap1[i].Readings[0], snap2[i].Readings[0])
+		for i := range snap1 {
+			if snap1[i].DeviceId != snap2[i].DeviceId {
+				t.Fatalf("batch %d DeviceId mismatch: %s vs %s", i, snap1[i].DeviceId, snap2[i].DeviceId)
+			}
+			if len(snap1[i].Readings) > 0 && len(snap2[i].Readings) > 0 {
+				assertSameReading(t, fmt.Sprintf("batch-%d", i), snap1[i].Readings[0], snap2[i].Readings[0])
+			}
 		}
-	}
+	})
+
+	// R-005 pins device i to seed uint64(i). Compare the fleet's stream
+	// against a hand-driven reference generator for the same index: a
+	// constant-seed mutant (New(0) for every device) breaks this, while
+	// run-vs-run identity (above) cannot detect it.
+	t.Run("S-005.1 fleet stream matches New(uint64(idx))", func(t *testing.T) {
+		const idx = 7
+		const ticks = 3
+		deviceID := fmt.Sprintf("device-%04d", idx)
+		base := time.Unix(20000, 0)
+		var stamps []time.Time
+		for i := 0; i < ticks; i++ {
+			stamps = append(stamps, base.Add(time.Duration(i)))
+		}
+		ref := New(uint64(idx))
+		want := make([]*apiv1.TelemetryBatch, 0, ticks)
+		for _, ts := range stamps {
+			want = append(want, ref.Next(deviceID, ts))
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		tb := newTickBoard()
+		rec := newRecorder()
+		f := NewFleet(idx+1, 1.0, rec.Consume)
+		tb.bind(f)
+		done := make(chan error, 1)
+		go func() { done <- f.Run(ctx) }()
+		for _, ts := range stamps {
+			tb.feed(idx, ts)
+			rec.waitNotify(t)
+		}
+		rec.mu.Lock()
+		got := make([]*apiv1.TelemetryBatch, len(rec.got))
+		copy(got, rec.got)
+		rec.mu.Unlock()
+		cancel()
+		if err := waitRun(t, done); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(got) != len(want) {
+			t.Fatalf("received %d batches, want %d", len(got), len(want))
+		}
+		for i := range want {
+			if got[i].DeviceId != deviceID {
+				t.Fatalf("batch %d DeviceId = %q, want %q", i, got[i].DeviceId, deviceID)
+			}
+			assertSameReading(t, fmt.Sprintf("seed-pin-%d", i), got[i].Readings[0], want[i].Readings[0])
+		}
+	})
 }
 
 func TestRunShutdown(t *testing.T) {
@@ -513,7 +577,7 @@ func TestRunShutdown(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
-	t.Run("S-006.2 consumer channel closed and drained", func(t *testing.T) {
+	t.Run("S-006.3 consumer channel closed and drained", func(t *testing.T) {
 		if !rec.isClosed() {
 			t.Fatal("consumer not closed")
 		}
@@ -521,7 +585,7 @@ func TestRunShutdown(t *testing.T) {
 			t.Fatalf("expected 2 received, got %d", rec.Received())
 		}
 	})
-	t.Run("S-006.3 no goroutine leak", func(t *testing.T) {
+	t.Run("S-006.2 no goroutine leak", func(t *testing.T) {
 		if after > before+5 {
 			t.Fatalf("goroutine leak: before=%d after=%d", before, after)
 		}
