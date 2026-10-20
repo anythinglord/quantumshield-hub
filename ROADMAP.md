@@ -60,7 +60,7 @@ Phased implementation plan. Phases are sequential: contracts → edge → persis
 - [x] **Task 2.2: Synthetic Data Engine**
   - Develop `internal/simulator` to generate realistic sensor metrics (CPU temperature, voltage, current, GPS coordinates).
   - Tests: table-driven coverage of value ranges (temperature, voltage, GPS bounds).
-- [ ] **Task 2.3: Concurrency Control**
+- [x] **Task 2.3: Concurrency Control**
   - Utilize Goroutines and Channels to emulate hundreds of independent edge devices running concurrently.
 - [ ] **Task 2.4: gRPC Streaming Client**
   - Integrate gRPC client streaming with mTLS certificate loading and per-event ML-DSA signature generation.

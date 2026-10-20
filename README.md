@@ -99,7 +99,7 @@ These targets are implemented across ROADMAP Phase 1 (build automation: `proto`,
 
 ### Device simulator
 
-`cmd/device-simulator` is the edge-node entrypoint. Task 2.1 ships the CLI surface and Task 2.2 ships the data engine at `internal/simulator` — a seeded, per-device generator of temperature (30–95 °C), voltage (3.0–4.2 V), current (0.05–2.0 A), and jittered WGS84 GPS readings typed as `api/v1` messages. Concurrency control and gRPC streaming land in Tasks 2.3–2.4. Run it with `go run` (no Makefile target exists yet):
+`cmd/device-simulator` is the edge-node entrypoint. Task 2.1 ships the CLI surface and Task 2.2 ships the data engine at `internal/simulator` — a seeded, per-device generator of temperature (30–95 °C), voltage (3.0–4.2 V), current (0.05–2.0 A), and jittered WGS84 GPS readings typed as `api/v1` messages. Task 2.3 adds concurrency control at `internal/simulator` — one goroutine per device (own ticker + own generator) feeding a shared bounded channel (1024 batches) drained by a pluggable consumer; a slow sink applies backpressure and pending ticks are dropped by design (intended congestion realism), device IDs are stable `device-%04d`. gRPC streaming lands in Task 2.4. Run it with `go run` (no Makefile target exists yet):
 
 ```bash
 go run ./cmd/device-simulator --devices=4 --rate=5
