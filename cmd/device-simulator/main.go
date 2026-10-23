@@ -22,10 +22,14 @@ import (
 
 // Config holds the validated simulator run parameters.
 type Config struct {
-	Devices    int     // number of simulated edge devices; 1..maxDevices
-	Rate       float64 // events/sec PER DEVICE (total ≈ Devices×Rate)
-	Address    string  // gRPC target host:port
-	PQCEnabled bool    // payload ML-DSA signing toggle; transport is always mTLS
+	Devices       int     // number of simulated edge devices; 1..maxDevices
+	Rate          float64 // events/sec PER DEVICE (total ≈ Devices×Rate)
+	Address       string  // gRPC target host:port
+	PQCEnabled    bool    // payload ML-DSA signing toggle; transport is always mTLS
+	TLSCert       string  // client certificate chain (PEM)
+	TLSKey        string  // client private key (PEM)
+	TLSCA         string  // CA bundle for server verification (PEM)
+	TLSServerName string  // optional TLS server name override
 }
 
 // Exit codes (locked by spec R-004).
@@ -55,6 +59,10 @@ func parse(args []string) (cfg Config, extra []string, flagOut []byte, err error
 	fs.Float64Var(&cfg.Rate, "rate", 1.0, "events/sec per device (total ≈ devices × rate)")
 	fs.StringVar(&cfg.Address, "address", "localhost:50051", "gRPC target host:port")
 	fs.BoolVar(&cfg.PQCEnabled, "pqc-enabled", true, "sign payloads with ML-DSA (transport is always mTLS)")
+	fs.StringVar(&cfg.TLSCert, "tls-cert", "certs/client/client-chain.crt", "client certificate chain (PEM)")
+	fs.StringVar(&cfg.TLSKey, "tls-key", "certs/client/client.key", "client private key (PEM)")
+	fs.StringVar(&cfg.TLSCA, "tls-ca", "certs/ca/root-ca.crt", "CA bundle for server verification (PEM)")
+	fs.StringVar(&cfg.TLSServerName, "tls-server-name", "", "optional TLS server name override")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, nil, buf.Bytes(), err
@@ -80,6 +88,15 @@ func validate(cfg Config) error {
 	}
 	if cfg.Address == "" {
 		return fmt.Errorf("invalid --address: must not be empty")
+	}
+	if cfg.TLSCert == "" {
+		return fmt.Errorf("invalid --tls-cert: must not be empty")
+	}
+	if cfg.TLSKey == "" {
+		return fmt.Errorf("invalid --tls-key: must not be empty")
+	}
+	if cfg.TLSCA == "" {
+		return fmt.Errorf("invalid --tls-ca: must not be empty")
 	}
 	return nil
 }
@@ -116,20 +133,23 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-// simulate runs the concurrent per-device fleet until ctx is cancelled. In
-// Task 2.3 the sink is an unobserved counting consumer (the fan-in drain
-// seam); Task 2.4 swaps in the gRPC streaming consumer without touching this
-// wiring. Transport settings (address, PQC signing) stay confined to
-// parse/validate until that consumer exists.
+// simulate runs the concurrent per-device fleet until ctx is cancelled.
 func simulate(ctx context.Context, cfg Config) error {
 	log.Printf("device-simulator: starting %d device(s) at %g events/sec/device",
 		cfg.Devices, cfg.Rate)
-	counter := simulator.NewCountingConsumer()
-	fleet := simulator.NewFleet(cfg.Devices, cfg.Rate, counter.Consume)
+	cons := simulator.NewGrpcConsumer(simulator.GrpcConsumerConfig{
+		Address:       cfg.Address,
+		TLSCert:       cfg.TLSCert,
+		TLSKey:        cfg.TLSKey,
+		TLSCA:         cfg.TLSCA,
+		TLSServerName: cfg.TLSServerName,
+		PQCEnabled:    cfg.PQCEnabled,
+	})
+	fleet := simulator.NewFleet(cfg.Devices, cfg.Rate, cons.Consume)
 	if err := fleet.Run(ctx); err != nil {
 		return fmt.Errorf("simulate: %w", err)
 	}
-	log.Printf("device-simulator: fleet stopped after %d batch(es)", counter.Received())
+	log.Printf("device-simulator: fleet stopped after %d batch(es)", cons.Received())
 	return nil
 }
 
