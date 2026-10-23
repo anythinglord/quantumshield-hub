@@ -3,8 +3,11 @@ package simulator
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -15,6 +18,9 @@ import (
 
 	apiv1 "github.com/anythinglord/quantumshield-hub/api/v1"
 	qscrypto "github.com/anythinglord/quantumshield-hub/internal/crypto"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -574,5 +580,269 @@ func TestS012_ProducersBlockNotDrop(t *testing.T) {
 		if seq := got.GetReadings()[0].GetSequence(); seq != uint64(i) {
 			t.Fatalf("batch %d sequence = %d, want %d (order preserved)", i, seq, i)
 		}
+	}
+}
+
+// TestS007_TLSRealTransport proves the consumer works over a real gRPC
+// server with TLS and that a server name / CA mismatch fails the handshake.
+func TestS007_TLSRealTransport(t *testing.T) {
+	t.Run("bufconn", func(t *testing.T) {
+		serverCert, serverCAPool := newTestTLSMaterial(t)
+
+		type ingestServer struct {
+			apiv1.UnimplementedTelemetryIngestionServiceServer
+			received []*apiv1.TelemetryIngestRequest
+		}
+		srvImpl := &struct {
+			received []*apiv1.TelemetryIngestRequest
+		}{}
+		gs := grpc.NewServer(grpc.Creds(credentials.NewTLS(qscrypto.ServerTLSConfig(serverCert, serverCAPool))))
+		apiv1.RegisterTelemetryIngestionServiceServer(gs, &bufconnServer{impl: srvImpl})
+
+		lis := bufconn.Listen(1024 * 1024)
+		defer lis.Close()
+		go func() { _ = gs.Serve(lis) }()
+		defer gs.Stop()
+
+		clientCert := serverCert // same cert works as client (has clientAuth)
+		c := NewGrpcConsumer(GrpcConsumerConfig{
+			Address:       "bufconn",
+			TLSServerName: "localhost",
+			PQCEnabled:    true,
+		})
+
+		c.streamFn = func(ctx context.Context) (telemetryStream, error) {
+			tlsCfg := qscrypto.ClientTLSConfig(clientCert, serverCAPool, "localhost")
+			conn, err := grpc.NewClient("passthrough:///bufconn",
+				grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
+				grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+			)
+			if err != nil {
+				return nil, err
+			}
+			stream, err := apiv1.NewTelemetryIngestionServiceClient(conn).StreamTelemetry(ctx)
+			if err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+			c.setConn(conn)
+			return stream, nil
+		}
+		c.keygenFn = c.generateDeviceKey
+
+		batches := []*apiv1.TelemetryBatch{
+			{DeviceId: "dev1", Readings: []*apiv1.SensorReading{{Sequence: 1, TimestampNanos: 1000, TemperatureC: 20}}},
+		}
+		out := make(chan *apiv1.TelemetryBatch, len(batches))
+		for _, b := range batches {
+			out <- b
+		}
+		close(out)
+
+		if err := c.Consume(context.Background(), out); err != nil {
+			t.Fatalf("Consume() error = %v, want nil", err)
+		}
+		if got := c.Received(); got != 1 {
+			t.Fatalf("received = %d, want 1", got)
+		}
+		if len(srvImpl.received) != 1 {
+			t.Fatalf("server received = %d, want 1", len(srvImpl.received))
+		}
+		req := srvImpl.received[0]
+		if req.GetDeviceId() != "dev1" {
+			t.Fatalf("device id = %q", req.GetDeviceId())
+		}
+		if req.GetSignatureAlgorithm() != apiv1.SignatureAlgorithm_ML_DSA_65 {
+			t.Fatalf("alg = %v", req.GetSignatureAlgorithm())
+		}
+		if len(req.GetSignature()) == 0 {
+			t.Fatal("empty signature")
+		}
+		gotBatch := &apiv1.TelemetryBatch{}
+		if err := proto.Unmarshal(req.GetPayload(), gotBatch); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		sk, ok := c.deviceKeys[req.GetDeviceId()]
+		if !ok {
+			t.Fatal("no key cached")
+		}
+		if err := qscrypto.VerifyPayload(apiv1.SignatureAlgorithm_ML_DSA_65, sk.PublicKey().Bytes(), req.GetPayload(), req.GetSignature(), nil); err != nil {
+			t.Fatalf("verify: %v", err)
+		}
+	})
+
+	t.Run("tcp-loopback-derives-servername", func(t *testing.T) {
+		serverCert, serverCAPool := newTestTLSMaterial(t)
+		gs := grpc.NewServer(grpc.Creds(credentials.NewTLS(qscrypto.ServerTLSConfig(serverCert, serverCAPool))))
+		apiv1.RegisterTelemetryIngestionServiceServer(gs, &ingestServerTCP{})
+		lis, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lis.Close()
+		go func() { _ = gs.Serve(lis) }()
+		defer gs.Stop()
+
+		clientCert := serverCert
+		c := NewGrpcConsumer(GrpcConsumerConfig{
+			Address:       lis.Addr().String(),
+			TLSServerName: "",
+			PQCEnabled:    true,
+		})
+		c.streamFn = func(ctx context.Context) (telemetryStream, error) {
+			tlsCfg := qscrypto.ClientTLSConfig(clientCert, serverCAPool, deriveServerName(c.cfg.Address))
+			conn, err := grpc.NewClient(c.cfg.Address,
+				grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+			)
+			if err != nil {
+				return nil, err
+			}
+			stream, err := apiv1.NewTelemetryIngestionServiceClient(conn).StreamTelemetry(ctx)
+			if err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+			c.setConn(conn)
+			return stream, nil
+		}
+		c.keygenFn = c.generateDeviceKey
+
+		batches := []*apiv1.TelemetryBatch{{DeviceId: "d", Readings: []*apiv1.SensorReading{{Sequence: 1}}}}
+		out := make(chan *apiv1.TelemetryBatch, 1)
+		out <- batches[0]
+		close(out)
+		if err := c.Consume(context.Background(), out); err != nil {
+			t.Fatalf("Consume() error = %v", err)
+		}
+	})
+
+	t.Run("server-name-mismatch-fails", func(t *testing.T) {
+		serverCert, serverCAPool := newTestTLSMaterial(t)
+		gs := grpc.NewServer(grpc.Creds(credentials.NewTLS(qscrypto.ServerTLSConfig(serverCert, serverCAPool))))
+		apiv1.RegisterTelemetryIngestionServiceServer(gs, &ingestServerTCP{})
+		lis, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lis.Close()
+		go func() { _ = gs.Serve(lis) }()
+		defer gs.Stop()
+
+		clientCert := serverCert
+		c := NewGrpcConsumer(GrpcConsumerConfig{
+			Address:       lis.Addr().String(),
+			TLSServerName: "wrong.example.com",
+			PQCEnabled:    true,
+		})
+		c.streamFn = func(ctx context.Context) (telemetryStream, error) {
+			tlsCfg := qscrypto.ClientTLSConfig(clientCert, serverCAPool, c.serverName())
+			conn, err := grpc.NewClient(c.cfg.Address,
+				grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+			)
+			if err != nil {
+				return nil, err
+			}
+			stream, err := apiv1.NewTelemetryIngestionServiceClient(conn).StreamTelemetry(ctx)
+			if err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+			c.setConn(conn)
+			return stream, nil
+		}
+		c.keygenFn = c.generateDeviceKey
+
+		out := make(chan *apiv1.TelemetryBatch)
+		close(out)
+		err = c.Consume(context.Background(), out)
+		if err == nil {
+			t.Fatal("expected error on server name mismatch")
+		}
+	})
+
+	t.Run("ca-mismatch-fails", func(t *testing.T) {
+		serverCert, serverCAPool := newTestTLSMaterial(t)
+		gs := grpc.NewServer(grpc.Creds(credentials.NewTLS(qscrypto.ServerTLSConfig(serverCert, serverCAPool))))
+		apiv1.RegisterTelemetryIngestionServiceServer(gs, &ingestServerTCP{})
+		lis, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lis.Close()
+		go func() { _ = gs.Serve(lis) }()
+		defer gs.Stop()
+
+		clientCert := serverCert
+		c := NewGrpcConsumer(GrpcConsumerConfig{
+			Address:       lis.Addr().String(),
+			TLSServerName: deriveServerName(lis.Addr().String()),
+			PQCEnabled:    true,
+		})
+		c.streamFn = func(ctx context.Context) (telemetryStream, error) {
+			tlsCfg := qscrypto.ClientTLSConfig(clientCert, x509.NewCertPool(), c.serverName())
+			conn, err := grpc.NewClient(c.cfg.Address,
+				grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+			)
+			if err != nil {
+				return nil, err
+			}
+			stream, err := apiv1.NewTelemetryIngestionServiceClient(conn).StreamTelemetry(ctx)
+			if err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+			c.setConn(conn)
+			return stream, nil
+		}
+		c.keygenFn = c.generateDeviceKey
+
+		out := make(chan *apiv1.TelemetryBatch)
+		close(out)
+		err = c.Consume(context.Background(), out)
+		if err == nil {
+			t.Fatal("expected error on CA mismatch")
+		}
+	})
+}
+
+type ingestServerTCP struct {
+	apiv1.UnimplementedTelemetryIngestionServiceServer
+}
+
+func (s *ingestServerTCP) StreamTelemetry(stream apiv1.TelemetryIngestionService_StreamTelemetryServer) error {
+	for {
+		_, err := stream.Recv()
+		if err == nil {
+			_ = stream.Send(&apiv1.TelemetryIngestResponse{AckedSequence: 1, Status: apiv1.IngestStatus_INGEST_STATUS_ACCEPTED})
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+}
+
+type bufconnServer struct {
+	apiv1.UnimplementedTelemetryIngestionServiceServer
+	impl *struct {
+		received []*apiv1.TelemetryIngestRequest
+	}
+}
+
+func (s *bufconnServer) StreamTelemetry(stream apiv1.TelemetryIngestionService_StreamTelemetryServer) error {
+	for {
+		req, err := stream.Recv()
+		if err == nil {
+			if s.impl != nil {
+				s.impl.received = append(s.impl.received, req)
+			}
+			_ = stream.Send(&apiv1.TelemetryIngestResponse{AckedSequence: 1, Status: apiv1.IngestStatus_INGEST_STATUS_ACCEPTED})
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
 	}
 }
