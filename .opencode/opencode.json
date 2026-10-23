@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "agent": {
+  "agents": {
     "gentle-orchestrator": {
       "description": "Gentle AI SDD Orchestrator for quantumshield-hub",
       "mode": "primary",
