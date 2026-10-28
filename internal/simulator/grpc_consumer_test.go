@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -840,5 +842,223 @@ func (s *bufconnServer) StreamTelemetry(stream apiv1.TelemetryIngestionService_S
 			return nil
 		}
 		return err
+	}
+}
+
+// TestT1_PrematureEOFReturnsStreamClosedByServer proves the recv path that
+// ends with io.EOF before the client half-closes aborts with the exact
+// "simulator: stream closed by server" error (mapRecvOutcome line).
+func TestT1_PrematureEOFReturnsStreamClosedByServer(t *testing.T) {
+	ctx := context.Background()
+	c, _ := fakeConsumer(GrpcConsumerConfig{}, []recvResult{{}})
+	out := make(chan *apiv1.TelemetryBatch) // no batches, never closed
+
+	err := c.Consume(ctx, out)
+	if err == nil {
+		t.Fatal("Consume() error = nil, want premature-EOF abort")
+	}
+	if got := err.Error(); got != "simulator: stream closed by server" {
+		t.Fatalf("Consume() error = %q, want %q", got, "simulator: stream closed by server")
+	}
+}
+
+// TestT1_SendErrorWhileContextCanceledReturnsNil proves the send-error path
+// returns nil when the context is already canceled (shutdown race).
+func TestT1_SendErrorWhileContextCanceledReturnsNil(t *testing.T) {
+	sentinel := errors.New("transport refused the message")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	c := NewGrpcConsumer(GrpcConsumerConfig{})
+	c.streamFn = func(ctx context.Context) (telemetryStream, error) {
+		return &failingSendStream{fakeStream: newFakeStream(ctx, nil), err: sentinel}, nil
+	}
+	out := make(chan *apiv1.TelemetryBatch, 1)
+	out <- &apiv1.TelemetryBatch{DeviceId: "device-0000"}
+	close(out)
+
+	if err := c.Consume(ctx, out); err != nil {
+		t.Fatalf("Consume() error = %v, want nil on ctx-canceled send failure", err)
+	}
+}
+
+// TestT2_DeviceKeySingleFlightPerDevice proves keygen runs exactly once per
+// device even when concurrent first-batches race for the same device id.
+func TestT2_DeviceKeySingleFlightPerDevice(t *testing.T) {
+	c := NewGrpcConsumer(GrpcConsumerConfig{PQCEnabled: true})
+	release := make(chan struct{})
+	var calls int32
+	c.keygenFn = func() (*mldsa.PrivateKey, error) {
+		atomic.AddInt32(&calls, 1)
+		<-release
+		return mldsa.GenerateKey(mldsa.MLDSA65())
+	}
+
+	const n = 8
+	results := make(chan *mldsa.PrivateKey, n)
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			sk, err := c.deviceKey("dev")
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- sk
+		}()
+	}
+
+	deadline := time.After(2 * time.Second)
+	for atomic.LoadInt32(&calls) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("keygen was never invoked")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		close(release)
+		t.Fatalf("concurrent keygen calls while blocked = %d, want 1", got)
+	}
+	close(release)
+
+	for i := 0; i < n; i++ {
+		select {
+		case err := <-errs:
+			t.Fatalf("deviceKey error: %v", err)
+		case <-results:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout collecting deviceKey results")
+		}
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("total keygen calls = %d, want 1", got)
+	}
+}
+
+// TestT2_DeviceKeyOnePerDistinctDevice covers reuse and distinctness.
+func TestT2_DeviceKeyOnePerDistinctDevice(t *testing.T) {
+	c := NewGrpcConsumer(GrpcConsumerConfig{PQCEnabled: true})
+	var calls int32
+	c.keygenFn = func() (*mldsa.PrivateKey, error) {
+		atomic.AddInt32(&calls, 1)
+		return mldsa.GenerateKey(mldsa.MLDSA65())
+	}
+
+	skA, err := c.deviceKey("a")
+	if err != nil {
+		t.Fatalf("deviceKey(a) error = %v", err)
+	}
+	skB, err := c.deviceKey("b")
+	if err != nil {
+		t.Fatalf("deviceKey(b) error = %v", err)
+	}
+	if atomic.LoadInt32(&calls) != 2 {
+		t.Fatalf("keygen calls = %d, want 2", calls)
+	}
+	if bytes.Equal(skA.PublicKey().Bytes(), skB.PublicKey().Bytes()) {
+		t.Fatal("distinct devices share a public key")
+	}
+
+	skA2, err := c.deviceKey("a")
+	if err != nil {
+		t.Fatalf("deviceKey(a) reuse error = %v", err)
+	}
+	if atomic.LoadInt32(&calls) != 2 {
+		t.Fatalf("keygen calls after reuse = %d, want 2", calls)
+	}
+	if skA != skA2 {
+		t.Fatal("device key not reused for the same device id")
+	}
+}
+
+// TestT2_DeviceKeyKeygenFailureNotCached covers the error branch.
+func TestT2_DeviceKeyKeygenFailureNotCached(t *testing.T) {
+	c := NewGrpcConsumer(GrpcConsumerConfig{PQCEnabled: true})
+	boom := errors.New("keygen boom")
+	c.keygenFn = func() (*mldsa.PrivateKey, error) { return nil, boom }
+
+	sk, err := c.deviceKey("dev")
+	if err == nil || sk != nil {
+		t.Fatalf("deviceKey() = (%v, %v), want (nil, error)", sk, err)
+	}
+	if !errors.Is(err, boom) {
+		t.Fatalf("deviceKey() error = %v, want to wrap %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), "simulator: generate device key") {
+		t.Fatalf("deviceKey() error = %q, want simulator: generate device key context", err)
+	}
+	if _, ok := c.deviceKeys["dev"]; ok {
+		t.Fatal("failed keygen was cached")
+	}
+}
+
+// TestT3_DefaultDialStreamFileTLS exercises the real file-based dialStream
+// path: TLS material is persisted to disk and a real gRPC server is dialed
+// over loopback TLS using the consumer's default stream factory.
+func TestT3_DefaultDialStreamFileTLS(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration-grade: real TLS files + loopback server")
+	}
+
+	cert, _, caCert := newTestTLSMaterialWithCA(t)
+
+	dir := t.TempDir()
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})
+	keyDER, err := x509.MarshalPKCS8PrivateKey(cert.PrivateKey)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCert.Raw})
+
+	certPath := filepath.Join(dir, "client.crt")
+	keyPath := filepath.Join(dir, "client.key")
+	caPath := filepath.Join(dir, "ca.crt")
+	if err := os.WriteFile(certPath, certPEM, 0600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	if err := os.WriteFile(caPath, caPEM, 0600); err != nil {
+		t.Fatalf("write ca: %v", err)
+	}
+
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+
+	gs := grpc.NewServer(grpc.Creds(credentials.NewTLS(qscrypto.ServerTLSConfig(cert, pool))))
+	apiv1.RegisterTelemetryIngestionServiceServer(gs, &ingestServerTCP{})
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lis.Close()
+	go func() { _ = gs.Serve(lis) }()
+	defer gs.Stop()
+
+	c := NewGrpcConsumer(GrpcConsumerConfig{
+		Address:    lis.Addr().String(),
+		TLSCert:    certPath,
+		TLSKey:     keyPath,
+		TLSCA:      caPath,
+		PQCEnabled: true,
+	})
+
+	batches := []*apiv1.TelemetryBatch{{DeviceId: "dev1", Readings: []*apiv1.SensorReading{{Sequence: 1}}}}
+	out := make(chan *apiv1.TelemetryBatch, len(batches))
+	for _, b := range batches {
+		out <- b
+	}
+	close(out)
+
+	if err := c.Consume(context.Background(), out); err != nil {
+		t.Fatalf("Consume() error = %v", err)
+	}
+	if got := c.Received(); got != 1 {
+		t.Fatalf("received = %d, want 1", got)
 	}
 }

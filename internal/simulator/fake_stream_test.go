@@ -253,6 +253,15 @@ func (f *fakeStream) waitRecvDone() {
 // discarded with it, so there is nothing to clean up.
 func newTestTLSMaterial(t *testing.T) (tls.Certificate, *x509.CertPool) {
 	t.Helper()
+	cert, pool, _ := newTestTLSMaterialWithCA(t)
+	return cert, pool
+}
+
+// newTestTLSMaterialWithCA is like newTestTLSMaterial but also returns the
+// generated CA certificate, so callers that need to persist the trust roots
+// to disk (e.g. the file-based dialStream coverage test) can encode them.
+func newTestTLSMaterialWithCA(t *testing.T) (tls.Certificate, *x509.CertPool, *x509.Certificate) {
+	t.Helper()
 
 	caPub, caPriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -311,7 +320,7 @@ func newTestTLSMaterial(t *testing.T) (tls.Certificate, *x509.CertPool) {
 	pool := x509.NewCertPool()
 	pool.AddCert(caCert)
 
-	return cert, pool
+	return cert, pool, caCert
 }
 
 // TestHarness_FakeStreamRecordsSends proves the fake bidi stream records

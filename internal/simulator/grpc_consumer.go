@@ -199,25 +199,27 @@ func (c *GrpcConsumer) sendBatch(stream telemetryStream, batch *apiv1.TelemetryB
 // deviceKey returns the cached ML-DSA key for deviceID, generating it on
 // first use (design D1).
 func (c *GrpcConsumer) deviceKey(deviceID string) (*mldsa.PrivateKey, error) {
+	// Hold the lock across keygen so it is single-flight per device id:
+	// concurrent first-batches for the same device cannot invoke keygenFn
+	// more than once (design A2/D1).
 	c.keyMu.Lock()
+	defer c.keyMu.Unlock()
+
 	if sk, ok := c.deviceKeys[deviceID]; ok {
-		c.keyMu.Unlock()
 		return sk, nil
 	}
-	c.keyMu.Unlock()
 
 	sk, err := c.keygenFn()
 	if err != nil {
 		return nil, fmt.Errorf("simulator: generate device key: %w", err)
 	}
 
-	c.keyMu.Lock()
+	// Re-check in case a nested caller populated the cache; the lock is
+	// held, so this is defensive only.
 	if existing, ok := c.deviceKeys[deviceID]; ok {
-		c.keyMu.Unlock()
 		return existing, nil
 	}
 	c.deviceKeys[deviceID] = sk
-	c.keyMu.Unlock()
 	return sk, nil
 }
 
