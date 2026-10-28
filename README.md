@@ -14,7 +14,7 @@ The platform is capable of processing thousands of gRPC streaming events per sec
 
 ## Status
 
-Early stage — repository bootstrap. No service is running yet. The implementation plan lives in `ROADMAP.md` (currently at Phase 1). Nothing here is production-ready.
+Early stage — repository bootstrap. No service is running yet. The implementation plan lives in `ROADMAP.md` (currently at Phase 2). Nothing here is production-ready.
 
 ## Architecture & System Design
 
@@ -96,6 +96,36 @@ make dev-down # tear down local infrastructure
 ```
 
 These targets are implemented across ROADMAP Phase 1 (build automation: `proto`, `certs`, `test`, `lint`) and Phase 5 (dev environment: `dev-up`, `dev-down`). Until the dev targets exist, see `AGENTS.md` §4 for the full command list.
+
+### Device simulator
+
+`cmd/device-simulator` is the edge-node entrypoint. Task 2.1 ships the CLI surface and Task 2.2 ships the data engine at `internal/simulator` — a seeded, per-device generator of temperature (30–95 °C), voltage (3.0–4.2 V), current (0.05–2.0 A), and jittered WGS84 GPS readings typed as `api/v1` messages. Task 2.3 adds concurrency control at `internal/simulator` — one goroutine per device (own ticker + own generator) feeding a shared bounded channel (1024 batches) drained by a pluggable consumer; a slow sink applies backpressure and pending ticks are dropped by design (intended congestion realism), device IDs are stable `device-%04d`. Task 2.4 adds the gRPC streaming consumer: one `StreamTelemetry` bidi stream per run, a lazily-generated ML-DSA-65 key per device, and a hybrid-PQC mTLS dial. Run it with `go run` (no Makefile target exists yet):
+
+```bash
+make certs                                 # required before first run
+go run ./cmd/device-simulator --devices=4 --rate=5
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--devices` | int | `1` | Number of simulated edge devices (1–10000) |
+| `--rate` | float64 | `1.0` | Events/sec **per device**; total throughput is `devices × rate` |
+| `--address` | string | `localhost:50051` | gRPC target host:port |
+| `--pqc-enabled` | bool | `true` | Sign payloads with ML-DSA; transport is always mTLS regardless |
+| `--tls-cert` | string | `certs/client/client-chain.crt` | Client certificate chain (PEM) |
+| `--tls-key` | string | `certs/client/client.key` | Client private key (PEM) |
+| `--tls-ca` | string | `certs/ca/root-ca.crt` | CA bundle used to verify the server (PEM) |
+| `--tls-server-name` | string | `""` (derived from `--address`) | TLS server-name override; empty derives the host from `--address` (`localhost:50051` → `localhost`) |
+
+Invalid values exit with code `2` and a diagnostic on stderr; empty TLS paths are rejected in the same way. `--help` prints usage to stdout and exits `0`.
+
+### Unsigned mode and TLS prerequisites
+
+The three TLS file flags default to the local PKI produced by `make certs` and are resolved relative to the repository root. Run `make certs` before the first simulator start: the generated `certs/` tree is git-ignored, and a missing file fails at dial time with an error naming the path.
+
+With `--pqc-enabled=false` the simulator sends a **wire-legal unsigned** request instead of signing: `signature` is empty and `signature_algorithm` is `UNSPECIFIED`, and no ML-DSA key is generated for any device. The transport still negotiates hybrid-PQC mTLS — only the per-payload signature layer is disabled. This mode is intended for local debugging and load tests; production node traffic must stay signed.
+
+Per-device ML-DSA-65 key generation is CPU-bound: at the upper device/rate bounds the simulator spends noticeable time on signing, so throughput measurements from this tool are not a proxy for ingestion-server capacity.
 
 ## Configuration & Environment Variables
 
