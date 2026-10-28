@@ -589,10 +589,6 @@ func TestS007_TLSRealTransport(t *testing.T) {
 	t.Run("bufconn", func(t *testing.T) {
 		serverCert, serverCAPool := newTestTLSMaterial(t)
 
-		type ingestServer struct {
-			apiv1.UnimplementedTelemetryIngestionServiceServer
-			received []*apiv1.TelemetryIngestRequest
-		}
 		srvImpl := &struct {
 			received []*apiv1.TelemetryIngestRequest
 		}{}
