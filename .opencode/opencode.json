@@ -4,34 +4,34 @@
     "gentle-orchestrator": {
       "description": "Gentle AI SDD Orchestrator for quantumshield-hub",
       "mode": "primary",
-      "model": "opencode/big-pickle"
+      "model": "opencode-go/mimo-v2.6-flash"
     },
     "sdd-init": {
-      "model": "opencode/mimo-v2.6-flash-free"
+      "model": "opencode-go/deepseek-v4.1-flash"
     },
     "sdd-explore": {
-      "model": "opencode/mimo-v2.6-flash-free"
+      "model": "opencode-go/deepseek-v4.1-flash"
     },
     "sdd-propose": {
-      "model": "opencode/big-pickle"
+      "model": "opencode-go/mimo-v2.6-flash"
     },
     "sdd-tasks": {
-      "model": "opencode/mimo-v2.6-flash-free"
+      "model": "opencode-go/deepseek-v4.1-flash"
     },
     "sdd-verify": {
-      "model": "opencode/mimo-v2.6-flash-free"
+      "model": "opencode-go/mimo-v2.6-flash-free"
     },
     "sdd-archive": {
-      "model": "opencode/mimo-v2.6-flash-free"
+      "model": "opencode-go/deepseek-v4.1-flash"
     },
     "sdd-spec": {
-      "model": "opencode/big-pickle"
+      "model": "opencode-go/mimo-v2.6-flash"
     },
     "sdd-design": {
-      "model": "opencode/big-pickle"
+      "model": "opencode-go/mimo-v2.6-flash"
     },
     "sdd-apply": {
-      "model": "opencode/big-pickle"
+      "model": "opencode-go/deepseek-v4.1-flash"
     }
   }
 }
