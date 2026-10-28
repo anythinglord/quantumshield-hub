@@ -62,7 +62,7 @@ Phased implementation plan. Phases are sequential: contracts → edge → persis
   - Tests: table-driven coverage of value ranges (temperature, voltage, GPS bounds).
 - [x] **Task 2.3: Concurrency Control**
   - Utilize Goroutines and Channels to emulate hundreds of independent edge devices running concurrently.
-- [ ] **Task 2.4: gRPC Streaming Client**
+- [x] **Task 2.4: gRPC Streaming Client**
   - Integrate gRPC client streaming with mTLS certificate loading and per-event ML-DSA signature generation.
 
 ---
