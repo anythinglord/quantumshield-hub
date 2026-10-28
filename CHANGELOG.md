@@ -5,6 +5,41 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Features
+- **simulator:** Add device-simulator CLI entrypoint with flag parsing (Task 2.1)
+- **simulator:** Add seeded synthetic telemetry generator
+- **simulator:** Run concurrent per-device fleet behind simulate seam
+- **simulator:** GRPC streaming consumer with per-device ML-DSA signing
+- **simulator:** Bufconn and TLS loopback consumer tests
+- **device-simulator:** TLS flags, validate, and gRPC consumer wiring
+
+### Bug Fixes
+- **simulator:** Confine transport config to parse and validate seams
+- **simulator:** Remove unused ingestServer type in TLS transport test
+- **simulator:** Single-flight device keygen; cover abort and file-TLS paths
+
+### Documentation
+- **readme:** Document device-simulator flags
+- **roadmap:** Tick Task 2.1
+- **readme:** Refresh device-simulator section for shipped data engine
+- **roadmap:** Tick Task 2.2
+- **readme:** Document concurrent fleet, device IDs, and intended tick-drop
+- **roadmap:** Tick Task 2.3
+- **readme:** Replace stale Tasks 2.3–2.4 sentence per design
+- **readme:** Document simulator TLS flags and unsigned mode
+- **roadmap:** Tick Task 2.4
+
+### Testing
+- **simulator:** Pin spec literals and align scenario IDs
+- **simulator:** Fake bidi stream + in-memory TLS cert harness
+
+### Chore
+- **config:** Use current agents key in opencode config
+- **config:** Update SDD agent model assignments
+- **config:** Fix sdd-verify model to available mimo-v2.6-flash
+
 ## [0.1.0] - 2026-10-18
 
 ### Features
