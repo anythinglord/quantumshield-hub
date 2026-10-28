@@ -19,7 +19,7 @@
       "model": "opencode-go/deepseek-v4.1-flash"
     },
     "sdd-verify": {
-      "model": "opencode-go/mimo-v2.6-flash-free"
+      "model": "opencode-go/mimo-v2.6-flash"
     },
     "sdd-archive": {
       "model": "opencode-go/deepseek-v4.1-flash"
