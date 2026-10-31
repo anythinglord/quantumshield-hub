@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-// Worker pool configuration environment variables (design A5). BATCH_MAX and
-// BATCH_WAIT are parsed and validated here so the runtime entrypoint reads one
-// config object; their accumulation semantics arrive with the batcher.
+// Worker pool configuration environment variables (design A5). BATCH_MAX bounds
+// the rows accumulated per worker before an immediate flush; BATCH_WAIT is the
+// maximum age of a partial batch before the timer flushes it.
 const (
 	envIngestWorkers   = "INGEST_WORKERS"
 	envIngestQueue     = "INGEST_QUEUE"
@@ -29,6 +29,31 @@ const (
 
 // ErrPoolClosed reports an Enqueue that arrived after Close started.
 var ErrPoolClosed = errors.New("ingestion: worker pool closed")
+
+// batchTimer and clock are the timer seam behind the size-or-timer batcher.
+// Production uses realClock; tests inject a controllable clock so timer
+// scenarios are event-driven instead of sleep-driven.
+type batchTimer interface {
+	C() <-chan time.Time
+	Stop() bool
+}
+
+type clock interface {
+	NewTimer(d time.Duration) batchTimer
+}
+
+type realClock struct{}
+
+func (realClock) NewTimer(d time.Duration) batchTimer {
+	return realTimer{t: time.NewTimer(d)}
+}
+
+type realTimer struct {
+	t *time.Timer
+}
+
+func (r realTimer) C() <-chan time.Time { return r.t.C }
+func (r realTimer) Stop() bool          { return r.t.Stop() }
 
 // WorkerPoolConfig carries every tuning knob for the sharded worker pool.
 type WorkerPoolConfig struct {
@@ -108,6 +133,7 @@ func parseBoundedInt(name, value string, minimum int) (int, error) {
 type WorkerPool struct {
 	inserter BatchInserter
 	cfg      WorkerPoolConfig
+	clock    clock
 
 	queues []chan TelemetryRow
 
@@ -126,6 +152,12 @@ type WorkerPool struct {
 // NewWorkerPool starts cfg.Workers goroutines and returns a ready pool. The
 // caller owns shutdown and must call Close to drain the queues.
 func NewWorkerPool(inserter BatchInserter, cfg WorkerPoolConfig) (*WorkerPool, error) {
+	return newWorkerPool(inserter, cfg, realClock{})
+}
+
+// newWorkerPool is NewWorkerPool with an injectable timer seam. The clock is
+// unexported so the public API stays as design A5 specifies.
+func newWorkerPool(inserter BatchInserter, cfg WorkerPoolConfig, clk clock) (*WorkerPool, error) {
 	if inserter == nil {
 		return nil, errors.New("ingestion: worker pool: inserter is nil")
 	}
@@ -141,10 +173,14 @@ func NewWorkerPool(inserter BatchInserter, cfg WorkerPoolConfig) (*WorkerPool, e
 	if cfg.BatchWait < 0 {
 		return nil, fmt.Errorf("ingestion: worker pool: batch wait=%s: must not be negative", cfg.BatchWait)
 	}
+	if clk == nil {
+		clk = realClock{}
+	}
 
 	p := &WorkerPool{
 		inserter: inserter,
 		cfg:      cfg,
+		clock:    clk,
 		queues:   make([]chan TelemetryRow, cfg.Workers),
 		done:     make(chan struct{}),
 	}
@@ -215,21 +251,70 @@ func (p *WorkerPool) Close(ctx context.Context) error {
 }
 
 // Err returns the first InsertBatch error observed by any worker, wrapped with
-// its shard and device context. It is safe to call concurrently with workers.
+// its shard and batch-size context. It is safe to call concurrently with workers.
 func (p *WorkerPool) Err() error {
 	p.errMu.Lock()
 	defer p.errMu.Unlock()
 	return p.firstErr
 }
 
+// run owns one shard's accumulation buffer. A batch is flushed when it reaches
+// cfg.BatchMax (immediately) or when cfg.BatchWait elapses since the first row
+// arrived, whichever happens first (design A5). On drain, any partial batch
+// flushes before the worker exits so no accepted row is lost (spec S-017).
 func (p *WorkerPool) run(shard int) {
 	defer p.wg.Done()
-	for row := range p.queues[shard] {
-		// Insert work is detached from any request/stream context on purpose:
-		// a cancelled client must not drop rows already accepted, and the final
-		// drain during shutdown has to run to completion (design A5/A8).
-		if err := p.inserter.InsertBatch(context.Background(), []TelemetryRow{row}); err != nil {
-			p.recordErr(fmt.Errorf("ingestion: worker pool: shard %d: insert device %q: %w", shard, row.DeviceID, err))
+
+	queue := p.queues[shard]
+	var (
+		buffer  []TelemetryRow
+		timer   batchTimer
+		timeout <-chan time.Time
+	)
+
+	stopTimer := func() {
+		if timer != nil {
+			timer.Stop()
+			timer = nil
+			timeout = nil
+		}
+	}
+	// Insert work is detached from any request/stream context on purpose: a
+	// cancelled client must not drop rows already accepted, and the final
+	// drain during shutdown has to run to completion (design A5/A8).
+	flush := func() {
+		if len(buffer) == 0 {
+			return
+		}
+		rows := buffer
+		buffer = nil
+		if err := p.inserter.InsertBatch(context.Background(), rows); err != nil {
+			p.recordErr(fmt.Errorf("ingestion: worker pool: shard %d: insert %d rows: %w", shard, len(rows), err))
+		}
+	}
+
+	for {
+		select {
+		case row, ok := <-queue:
+			if !ok {
+				stopTimer()
+				flush()
+				return
+			}
+			buffer = append(buffer, row)
+			if timer == nil {
+				// Arm the wait window when the buffer leaves empty.
+				timer = p.clock.NewTimer(p.cfg.BatchWait)
+				timeout = timer.C()
+			}
+			if len(buffer) >= p.cfg.BatchMax {
+				stopTimer()
+				flush()
+			}
+		case <-timeout:
+			timer = nil
+			timeout = nil
+			flush()
 		}
 	}
 }

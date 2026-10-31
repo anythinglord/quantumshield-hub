@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -58,6 +59,88 @@ func (s *syncInserter) batchSizes() []int {
 	return sizes
 }
 
+// fakeClock makes the size-or-timer batcher deterministic: every NewTimer is
+// recorded and announced on armed, and fireLatest releases the newest timer on
+// demand. Tests never sleep waiting for a wall-clock timer.
+type fakeClock struct {
+	mu     sync.Mutex
+	timers []*fakeTimer
+	armed  chan struct{}
+}
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{armed: make(chan struct{}, 8)}
+}
+
+func (c *fakeClock) NewTimer(time.Duration) batchTimer {
+	t := &fakeTimer{ch: make(chan time.Time, 1)}
+	c.mu.Lock()
+	c.timers = append(c.timers, t)
+	c.mu.Unlock()
+	select {
+	case c.armed <- struct{}{}:
+	default:
+	}
+	return t
+}
+
+func (c *fakeClock) latest() *fakeTimer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.timers) == 0 {
+		return nil
+	}
+	return c.timers[len(c.timers)-1]
+}
+
+func (c *fakeClock) fireLatest() bool {
+	t := c.latest()
+	if t == nil {
+		return false
+	}
+	t.fire()
+	return true
+}
+
+type fakeTimer struct {
+	ch chan time.Time
+}
+
+func (t *fakeTimer) C() <-chan time.Time { return t.ch }
+func (t *fakeTimer) Stop() bool          { return true }
+func (t *fakeTimer) fire() {
+	select {
+	case t.ch <- time.Time{}:
+	default:
+	}
+}
+
+// firstErrorInserter returns a scripted error per call so tests can prove the
+// pool keeps the FIRST insert error and keeps draining.
+type firstErrorInserter struct {
+	mu    sync.Mutex
+	calls int
+	errs  []error
+	rows  int
+}
+
+func (f *firstErrorInserter) InsertBatch(_ context.Context, rows []TelemetryRow) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rows += len(rows)
+	f.calls++
+	if f.calls-1 < len(f.errs) {
+		return f.errs[f.calls-1]
+	}
+	return nil
+}
+
+func (f *firstErrorInserter) totalRows() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.rows
+}
+
 func testPoolConfig() WorkerPoolConfig {
 	return WorkerPoolConfig{
 		Workers:       4,
@@ -74,6 +157,28 @@ func newTestPool(t *testing.T, inserter BatchInserter, cfg WorkerPoolConfig) *Wo
 		t.Fatalf("NewWorkerPool: %v", err)
 	}
 	return pool
+}
+
+// newTestPoolWithClock injects the controllable timer seam used by the
+// size-or-timer batch tests.
+func newTestPoolWithClock(t *testing.T, inserter BatchInserter, cfg WorkerPoolConfig, clk clock) *WorkerPool {
+	t.Helper()
+	pool, err := newWorkerPool(inserter, cfg, clk)
+	if err != nil {
+		t.Fatalf("newWorkerPool: %v", err)
+	}
+	return pool
+}
+
+// waitForInsert blocks until the fake inserter has been called once. It is
+// event-driven (no sleep-based assertion).
+func waitForInsert(t *testing.T, entered <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for InsertBatch")
+	}
 }
 
 func closePool(t *testing.T, pool *WorkerPool) {
@@ -240,11 +345,10 @@ func TestWorkerPoolPerDeviceOrdering(t *testing.T) {
 		assertSequences(t, sequencesFor(rows, "device-b"), []int64{1, 2, 3})
 		assertSequences(t, sequencesFor(rows, "device-c"), []int64{1, 2})
 
-		// Interim WU3 behavior: one InsertBatch call per row. WU4 replaces
-		// this with size-or-timer batching.
+		// Batching must never strand a row or emit an empty slice.
 		for i, size := range inserter.batchSizes() {
-			if size != 1 {
-				t.Fatalf("batch %d has %d rows, want 1 (interim per-row dispatch)", i, size)
+			if size == 0 {
+				t.Fatalf("batch %d is empty", i)
 			}
 		}
 	})
@@ -256,6 +360,7 @@ func TestWorkerPoolBoundedBacklog(t *testing.T) {
 	cfg := testPoolConfig()
 	cfg.Workers = 1
 	cfg.QueueCapacity = 1
+	cfg.BatchMax = 1 // flush every row so the worker parks inside InsertBatch
 	pool := newTestPool(t, inserter, cfg)
 	ctx := context.Background()
 
@@ -306,6 +411,7 @@ func TestWorkerPoolEnqueueHonorsCancellation(t *testing.T) {
 	cfg := testPoolConfig()
 	cfg.Workers = 1
 	cfg.QueueCapacity = 1
+	cfg.BatchMax = 1 // flush every row so the worker parks inside InsertBatch
 	pool := newTestPool(t, inserter, cfg)
 
 	ctx := context.Background()
@@ -400,13 +506,184 @@ func TestWorkerPoolRecordsInsertError(t *testing.T) {
 	}
 	closePool(t, pool)
 
-	t.Run("insert error is recorded and does not stall drain", func(t *testing.T) {
+	t.Run("S-018 insert error is recorded and does not stall drain", func(t *testing.T) {
 		if got := len(inserter.rows()); got != 3 {
 			t.Fatalf("inserted %d rows, want 3 (worker must keep draining after an error)", got)
 		}
 		err := pool.Err()
 		if !errors.Is(err, insertErr) {
 			t.Fatalf("Err() = %v, want wrapped insert error", err)
+		}
+	})
+}
+
+func TestWorkerPoolBatchFlushOnSize(t *testing.T) {
+	inserter := &syncInserter{entered: make(chan struct{}, 8)}
+	clk := newFakeClock()
+	cfg := testPoolConfig()
+	cfg.Workers = 1
+	cfg.QueueCapacity = 8
+	cfg.BatchMax = 3
+	cfg.BatchWait = time.Hour // the timer must not be what triggers this flush
+	pool := newTestPoolWithClock(t, inserter, cfg, clk)
+
+	for i := 1; i <= cfg.BatchMax; i++ {
+		if err := pool.Enqueue(context.Background(), row("device-a", int64(i))); err != nil {
+			t.Fatalf("Enqueue %d: %v", i, err)
+		}
+	}
+
+	t.Run("S-014 flush on size", func(t *testing.T) {
+		waitForInsert(t, inserter.entered)
+		closePool(t, pool)
+
+		sizes := inserter.batchSizes()
+		if len(sizes) != 1 || sizes[0] != cfg.BatchMax {
+			t.Fatalf("batch sizes = %v, want [%d] (size flush without waiting for the timer)", sizes, cfg.BatchMax)
+		}
+		assertSequences(t, sequencesFor(inserter.rows(), "device-a"), []int64{1, 2, 3})
+	})
+}
+
+func TestWorkerPoolBatchFlushOnTimer(t *testing.T) {
+	inserter := &syncInserter{entered: make(chan struct{}, 4)}
+	clk := newFakeClock()
+	cfg := testPoolConfig()
+	cfg.Workers = 1
+	cfg.QueueCapacity = 8
+	cfg.BatchMax = 1000
+	cfg.BatchWait = time.Hour
+	pool := newTestPoolWithClock(t, inserter, cfg, clk)
+
+	if err := pool.Enqueue(context.Background(), row("device-a", 1)); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	t.Run("S-015 flush on timer", func(t *testing.T) {
+		select {
+		case <-clk.armed:
+		case <-time.After(2 * time.Second):
+			t.Fatal("worker never armed the batch timer")
+		}
+		if !clk.fireLatest() {
+			t.Fatal("no batch timer to fire")
+		}
+		waitForInsert(t, inserter.entered)
+		closePool(t, pool)
+
+		sizes := inserter.batchSizes()
+		if len(sizes) != 1 || sizes[0] != 1 {
+			t.Fatalf("batch sizes = %v, want [1] (partial batch flushed by timer)", sizes)
+		}
+	})
+}
+
+func TestWorkerPoolBatchNoEmptyInsert(t *testing.T) {
+	t.Run("S-016 no insert when nothing pending", func(t *testing.T) {
+		inserter := &syncInserter{}
+		clk := newFakeClock()
+		cfg := testPoolConfig()
+		cfg.Workers = 1
+		pool := newTestPoolWithClock(t, inserter, cfg, clk)
+		closePool(t, pool)
+
+		if calls := len(inserter.batchSizes()); calls != 0 {
+			t.Fatalf("InsertBatch called %d times with no rows pending; want 0", calls)
+		}
+	})
+
+	t.Run("S-016 never inserts an empty slice", func(t *testing.T) {
+		inserter := &syncInserter{entered: make(chan struct{}, 4)}
+		clk := newFakeClock()
+		cfg := testPoolConfig()
+		cfg.Workers = 1
+		cfg.QueueCapacity = 8
+		cfg.BatchMax = 2
+		cfg.BatchWait = time.Hour
+		pool := newTestPoolWithClock(t, inserter, cfg, clk)
+
+		for i := 1; i <= cfg.BatchMax; i++ {
+			if err := pool.Enqueue(context.Background(), row("device-a", int64(i))); err != nil {
+				t.Fatalf("Enqueue %d: %v", i, err)
+			}
+		}
+		waitForInsert(t, inserter.entered)
+		closePool(t, pool)
+
+		sizes := inserter.batchSizes()
+		if len(sizes) == 0 {
+			t.Fatal("no batch inserted; expected the size flush")
+		}
+		for i, size := range sizes {
+			if size == 0 {
+				t.Fatalf("batch %d is empty", i)
+			}
+		}
+	})
+}
+
+func TestWorkerPoolFinalDrainFlush(t *testing.T) {
+	inserter := &syncInserter{}
+	clk := newFakeClock()
+	cfg := testPoolConfig()
+	cfg.Workers = 1
+	cfg.QueueCapacity = 16
+	cfg.BatchMax = 64
+	cfg.BatchWait = time.Hour
+	pool := newTestPoolWithClock(t, inserter, cfg, clk)
+
+	const total = 5
+	for i := 1; i <= total; i++ {
+		if err := pool.Enqueue(context.Background(), row("device-a", int64(i))); err != nil {
+			t.Fatalf("Enqueue %d: %v", i, err)
+		}
+	}
+	closePool(t, pool)
+
+	t.Run("S-017 final drain flushes partial batch", func(t *testing.T) {
+		sizes := inserter.batchSizes()
+		if len(sizes) != 1 || sizes[0] != total {
+			t.Fatalf("batch sizes = %v, want [%d] (partial batch flushed before exit)", sizes, total)
+		}
+		if got := len(inserter.rows()); got != total {
+			t.Fatalf("inserted %d rows, want %d", got, total)
+		}
+		assertSequences(t, sequencesFor(inserter.rows(), "device-a"), []int64{1, 2, 3, 4, 5})
+	})
+}
+
+func TestWorkerPoolBatchInsertErrorSurfaced(t *testing.T) {
+	first := errors.New("first insert failed")
+	second := errors.New("second insert failed")
+	inserter := &firstErrorInserter{errs: []error{first, second}}
+	clk := newFakeClock()
+	cfg := testPoolConfig()
+	cfg.Workers = 1
+	cfg.QueueCapacity = 8
+	cfg.BatchMax = 1
+	cfg.BatchWait = time.Hour
+	pool := newTestPoolWithClock(t, inserter, cfg, clk)
+
+	for i := 1; i <= 3; i++ {
+		if err := pool.Enqueue(context.Background(), row("device-a", int64(i))); err != nil {
+			t.Fatalf("Enqueue %d: %v", i, err)
+		}
+	}
+	closePool(t, pool)
+
+	t.Run("S-018 first insert error surfaced and drain completes", func(t *testing.T) {
+		if got := inserter.totalRows(); got != 3 {
+			t.Fatalf("inserted %d rows, want 3 (drain must continue after an error)", got)
+		}
+		err := pool.Err()
+		if !errors.Is(err, first) {
+			t.Fatalf("Err() = %v, want the first wrapped insert error", err)
+		}
+		if errors.Is(err, second) {
+			t.Fatalf("Err() = %v, must keep the FIRST insert error", err)
+		}
+		if !strings.Contains(err.Error(), "shard") {
+			t.Fatalf("Err() = %v, want shard context", err)
 		}
 	})
 }
